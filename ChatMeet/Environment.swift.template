@@ -1,0 +1,13 @@
+//
+// Environment.swift.template
+// ChatMeet
+//
+// Template for Environment.swift (auto-generated from .env)
+// The actual Environment.swift is generated during build and git-ignored
+//
+
+import Foundation
+
+enum Environment {
+    static let HF_TOKEN = "your_token_will_be_loaded_here"
+}
