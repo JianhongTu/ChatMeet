@@ -18,11 +18,21 @@ class MeetingAssistantViewModel: ObservableObject {
     @Published public var recordingDuration: TimeInterval = 0
     @Published public var isSummarizing: Bool = false
     
+    // Performance statistics
+    @Published public var transcriptionTime: TimeInterval = 0
+    @Published public var timeToFirstToken: TimeInterval = 0
+    @Published public var summarizationTime: TimeInterval = 0
+    @Published public var totalProcessingTime: TimeInterval = 0
+    
     private let audioRecorder = AudioRecorder()
     private let transcriptionService = TranscriptionService()
     private let summaryService = SummaryService()
     private var recordingTimer: Timer?
     private var playbackTimer: Timer?
+    private var processingStartTime: Date?
+    private var transcriptionStartTime: Date?
+    private var summarizationStartTime: Date?
+    private var firstTokenTime: Date?
     
     public init() {}
     
@@ -47,6 +57,12 @@ class MeetingAssistantViewModel: ObservableObject {
                     self.transcription = ""
                     self.summary = ""
                     self.recordingDuration = 0
+                    
+                    // Reset statistics
+                    self.transcriptionTime = 0
+                    self.timeToFirstToken = 0
+                    self.summarizationTime = 0
+                    self.totalProcessingTime = 0
                     
                     // Start recording
                     self.audioRecorder.startRecording()
@@ -121,10 +137,19 @@ class MeetingAssistantViewModel: ObservableObject {
         transcription = ""
         summary = ""
         
+        // Start overall processing timer
+        processingStartTime = Date()
+        
         // Transcribe audio
         statusMessage = "Transcribing audio..."
+        transcriptionStartTime = Date()
         do {
             let transcribedText = try await transcriptionService.transcribe(audioData)
+            
+            // Calculate transcription time
+            if let startTime = transcriptionStartTime {
+                transcriptionTime = Date().timeIntervalSince(startTime)
+            }
             
             // Update transcription text box
             transcription = transcribedText
@@ -160,20 +185,42 @@ class MeetingAssistantViewModel: ObservableObject {
         
         isSummarizing = true
         summary = ""
+        firstTokenTime = nil
         
         // Summarize transcription with real-time streaming
         statusMessage = "Generating summary..."
+        summarizationStartTime = Date()
         do {
             let summaryText = try await summaryService.summarize(transcription) { [weak self] partialSummary in
                 // Update summary in real-time as tokens are generated
                 Task { @MainActor in
-                    self?.summary = partialSummary
+                    guard let self = self else { return }
+                    
+                    // Track time to first token
+                    if self.firstTokenTime == nil && !partialSummary.isEmpty {
+                        self.firstTokenTime = Date()
+                        if let startTime = self.summarizationStartTime {
+                            self.timeToFirstToken = Date().timeIntervalSince(startTime)
+                        }
+                    }
+                    
+                    self.summary = partialSummary
                 }
+            }
+            
+            // Calculate total summarization time
+            if let startTime = summarizationStartTime {
+                summarizationTime = Date().timeIntervalSince(startTime)
+            }
+            
+            // Calculate total processing time
+            if let startTime = processingStartTime {
+                totalProcessingTime = Date().timeIntervalSince(startTime)
             }
             
             // Update final summary text box
             summary = summaryText
-            statusMessage = "Complete! Ready to record again"
+            statusMessage = String(format: "Complete! (%.1fs total)", totalProcessingTime)
         } catch {
             statusMessage = "Error generating summary: \(error.localizedDescription)"
             if summary.isEmpty {

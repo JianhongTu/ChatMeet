@@ -45,6 +45,12 @@ struct MeetingAssistantContentView: View {
             
             Divider()
             
+            // Statistics panel
+            if viewModel.totalProcessingTime > 0 {
+                statisticsPanel
+                Divider()
+            }
+            
             // Content area with transcription and summary text boxes side by side
             HStack(spacing: 0) {
                 transcriptionBox
@@ -80,6 +86,14 @@ struct MeetingAssistantContentView: View {
             .padding(.vertical, 16)
             
             Divider()
+            
+            // Statistics panel
+            if viewModel.totalProcessingTime > 0 {
+                statisticsPanel
+                    .padding(.horizontal, 20)
+                    .padding(.vertical, 12)
+                Divider()
+            }
             
             // Content area with transcription and summary text boxes stacked vertically
             VStack(spacing: 0) {
@@ -228,6 +242,75 @@ struct MeetingAssistantContentView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+    
+    // MARK: - Statistics Panel
+    
+    private var statisticsPanel: some View {
+        VStack(spacing: 8) {
+            Text("Performance Statistics")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundColor(.secondary)
+            
+            #if os(macOS)
+            HStack(spacing: 20) {
+                statisticItem(label: "Recording", value: formatTime(viewModel.recordingDuration))
+                Divider().frame(height: 30)
+                statisticItem(label: "Transcription", value: formatTime(viewModel.transcriptionTime))
+                Divider().frame(height: 30)
+                statisticItem(label: "Time to First Token", value: formatTime(viewModel.timeToFirstToken))
+                Divider().frame(height: 30)
+                statisticItem(label: "Summarization", value: formatTime(viewModel.summarizationTime))
+                Divider().frame(height: 30)
+                statisticItem(label: "Total", value: formatTime(viewModel.totalProcessingTime), highlight: true)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 8)
+            .background(Color.secondary.opacity(0.1))
+            .cornerRadius(8)
+            #else
+            VStack(spacing: 6) {
+                HStack {
+                    statisticItem(label: "Recording", value: formatTime(viewModel.recordingDuration))
+                    Spacer()
+                    statisticItem(label: "Transcription", value: formatTime(viewModel.transcriptionTime))
+                }
+                HStack {
+                    statisticItem(label: "First Token", value: formatTime(viewModel.timeToFirstToken))
+                    Spacer()
+                    statisticItem(label: "Summarization", value: formatTime(viewModel.summarizationTime))
+                }
+                statisticItem(label: "Total Processing", value: formatTime(viewModel.totalProcessingTime), highlight: true)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(Color.secondary.opacity(0.1))
+            .cornerRadius(8)
+            #endif
+        }
+    }
+    
+    private func statisticItem(label: String, value: String, highlight: Bool = false) -> some View {
+        VStack(spacing: 4) {
+            Text(label)
+                .font(.system(size: 10))
+                .foregroundColor(.secondary)
+            Text(value)
+                .font(.system(size: highlight ? 16 : 14, weight: highlight ? .bold : .medium))
+                .foregroundColor(highlight ? .blue : .primary)
+        }
+    }
+    
+    private func formatTime(_ time: TimeInterval) -> String {
+        if time < 1.0 {
+            return String(format: "%.0fms", time * 1000)
+        } else if time < 60.0 {
+            return String(format: "%.1fs", time)
+        } else {
+            let minutes = Int(time) / 60
+            let seconds = Int(time) % 60
+            return String(format: "%d:%02d", minutes, seconds)
+        }
     }
 }
 

@@ -131,7 +131,7 @@ class SummarizationModel: @unchecked Sendable {
         
         \(text)
         """
-        return "write a poem about cats"
+        
         return """
         <|begin_of_text|><|start_header_id|>system<|end_header_id|>
         
