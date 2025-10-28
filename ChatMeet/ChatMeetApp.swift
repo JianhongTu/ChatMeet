@@ -11,7 +11,10 @@ import SwiftUI
 struct ChatMeetApp: App {
     var body: some Scene {
         WindowGroup {
-            ContentView()
+            MeetingAssistantContentView()
         }
+        #if os(macOS)
+        .windowStyle(.hiddenTitleBar)
+        #endif
     }
 }

@@ -6,6 +6,13 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		F44B061B2EAB53E2009EBECA /* Hub in Frameworks */ = {isa = PBXBuildFile; productRef = F44B061A2EAB53E2009EBECA /* Hub */; };
+		F44B061D2EAB53E2009EBECA /* Tokenizers in Frameworks */ = {isa = PBXBuildFile; productRef = F44B061C2EAB53E2009EBECA /* Tokenizers */; };
+		F44B061F2EAB53E2009EBECA /* Transformers in Frameworks */ = {isa = PBXBuildFile; productRef = F44B061E2EAB53E2009EBECA /* Transformers */; };
+		F44B06222EAB53FA009EBECA /* Path in Frameworks */ = {isa = PBXBuildFile; productRef = F44B06212EAB53FA009EBECA /* Path */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXFileReference section */
 		F44B05DA2EAB51FE009EBECA /* ChatMeet.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = ChatMeet.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
@@ -23,6 +30,10 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				F44B061F2EAB53E2009EBECA /* Transformers in Frameworks */,
+				F44B06222EAB53FA009EBECA /* Path in Frameworks */,
+				F44B061D2EAB53E2009EBECA /* Tokenizers in Frameworks */,
+				F44B061B2EAB53E2009EBECA /* Hub in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -65,6 +76,10 @@
 			);
 			name = ChatMeet;
 			packageProductDependencies = (
+				F44B061A2EAB53E2009EBECA /* Hub */,
+				F44B061C2EAB53E2009EBECA /* Tokenizers */,
+				F44B061E2EAB53E2009EBECA /* Transformers */,
+				F44B06212EAB53FA009EBECA /* Path */,
 			);
 			productName = ChatMeet;
 			productReference = F44B05DA2EAB51FE009EBECA /* ChatMeet.app */;
@@ -94,6 +109,10 @@
 			);
 			mainGroup = F44B05D12EAB51FE009EBECA;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				F44B06192EAB53E2009EBECA /* XCRemoteSwiftPackageReference "swift-transformers" */,
+				F44B06202EAB53FA009EBECA /* XCRemoteSwiftPackageReference "Path" */,
+			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = F44B05DB2EAB51FE009EBECA /* Products */;
 			projectDirPath = "";
@@ -246,6 +265,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = ChatMeet/ChatMeet.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = 2CW3K43SGF;
@@ -254,6 +274,7 @@
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "ChatMeet needs access to your microphone to record and transcribe meeting audio.";
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphoneos*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphonesimulator*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents[sdk=iphoneos*]" = YES;
@@ -264,7 +285,7 @@
 				"INFOPLIST_KEY_UIStatusBarStyle[sdk=iphonesimulator*]" = UIStatusBarStyleDefault;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
-				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.1;
 				LD_RUNPATH_SEARCH_PATHS = "@executable_path/Frameworks";
 				"LD_RUNPATH_SEARCH_PATHS[sdk=macosx*]" = "@executable_path/../Frameworks";
 				MACOSX_DEPLOYMENT_TARGET = 15.7;
@@ -290,6 +311,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = ChatMeet/ChatMeet.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = 2CW3K43SGF;
@@ -298,6 +320,7 @@
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "ChatMeet needs access to your microphone to record and transcribe meeting audio.";
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphoneos*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphonesimulator*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents[sdk=iphoneos*]" = YES;
@@ -308,7 +331,7 @@
 				"INFOPLIST_KEY_UIStatusBarStyle[sdk=iphonesimulator*]" = UIStatusBarStyleDefault;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
-				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.1;
 				LD_RUNPATH_SEARCH_PATHS = "@executable_path/Frameworks";
 				"LD_RUNPATH_SEARCH_PATHS[sdk=macosx*]" = "@executable_path/../Frameworks";
 				MACOSX_DEPLOYMENT_TARGET = 15.7;
@@ -351,6 +374,48 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		F44B06192EAB53E2009EBECA /* XCRemoteSwiftPackageReference "swift-transformers" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/huggingface/swift-transformers";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 1.1.1;
+			};
+		};
+		F44B06202EAB53FA009EBECA /* XCRemoteSwiftPackageReference "Path" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/mxcl/Path.swift";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 1.4.1;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		F44B061A2EAB53E2009EBECA /* Hub */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = F44B06192EAB53E2009EBECA /* XCRemoteSwiftPackageReference "swift-transformers" */;
+			productName = Hub;
+		};
+		F44B061C2EAB53E2009EBECA /* Tokenizers */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = F44B06192EAB53E2009EBECA /* XCRemoteSwiftPackageReference "swift-transformers" */;
+			productName = Tokenizers;
+		};
+		F44B061E2EAB53E2009EBECA /* Transformers */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = F44B06192EAB53E2009EBECA /* XCRemoteSwiftPackageReference "swift-transformers" */;
+			productName = Transformers;
+		};
+		F44B06212EAB53FA009EBECA /* Path */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = F44B06202EAB53FA009EBECA /* XCRemoteSwiftPackageReference "Path" */;
+			productName = Path;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = F44B05D22EAB51FE009EBECA /* Project object */;
 }
