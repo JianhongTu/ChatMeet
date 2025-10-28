@@ -39,15 +39,25 @@ git lfs pull
 
 #### Add your Hugging Face token to Xcode Scheme:
 
-1. In Xcode, click on the scheme selector (next to the run/stop buttons)
+1. In Xcode, click on the **scheme selector** (next to the run/stop buttons at the top)
 2. Select **"Edit Scheme..."** (or press **Cmd+<**)
-3. In the left sidebar, select **Run**
-4. Go to the **Arguments** tab
-5. Under **Environment Variables**, find the `HF_TOKEN` entry
-6. Double-click the **Value** field and paste your token from https://huggingface.co/settings/tokens
-7. Click **Close**
+3. In the left sidebar, select **Run** → **Arguments** tab
+4. Under **Environment Variables**, you'll see `HF_TOKEN` with an empty value
+5. **Double-click** the Value column and paste your token from: https://huggingface.co/settings/tokens
+6. Click **Close**
 
-> **Note:** Each developer needs to add their own token in their local Xcode scheme. The scheme file in git has an empty value for security.
+```
+Xcode Scheme Setup:
+┌─────────────────────────────────────┐
+│ Run → Arguments → Environment Vars  │
+├──────────────┬──────────────────────┤
+│ Name         │ Value                │
+├──────────────┼──────────────────────┤
+│ HF_TOKEN     │ hf_your_token_here   │ ← Paste your token here
+└──────────────┴──────────────────────┘
+```
+
+> **Note:** Each developer adds their own token locally. The token is NOT stored in git - it stays in your personal Xcode user data.
 
 ### 4. Build and Run
 
@@ -97,50 +107,3 @@ ChatMeet/
     ├── WhisperDecoder_whisper-tiny.mlpackage
     └── StatefulLlama3.2Instruct.mlpackage
 ```
-
-## Models
-
-- **Whisper Tiny**: ~75MB, optimized for on-device speech recognition
-- **Llama 3.2 1B Instruct**: ~1.5GB, compact language model for summarization
-
-Models are stored using Git LFS and automatically loaded at runtime.
-
-## Technology Stack
-
-- **Swift 5.0** - Primary language
-- **SwiftUI** - UI framework
-- **Core ML** - Machine learning inference
-- **AVFoundation** - Audio recording and playback
-- **Hugging Face Transformers** - Model tokenization
-- **Git LFS** - Large file storage
-
-## Security & Privacy
-
-- ✅ All processing happens on-device
-- ✅ No data sent to external servers
-- ✅ Environment variables stored in git-ignored `.env` file
-- ✅ Tokens never committed to version control
-- ✅ Audio recordings stay local
-
-## Troubleshooting
-
-### Models not loading on iOS
-- Models use CPU-only inference on iOS to avoid compatibility issues
-- Performance may be slower on older devices
-- Recommended: iPhone 16 or newer
-
-### Environment variables not working
-- Ensure `.env` file exists in project root
-- Check that build phase script is configured correctly
-- Clean build folder (Cmd+Shift+K) and rebuild
-
-### Build errors
-- Run `git lfs pull` to ensure all model files are downloaded
-- Check that all Swift packages are resolved
-- Verify Xcode 16+ is installed
-
-For detailed information, see [Dependencies](ADD_DEPENDENCIES.md)
-
-## Contact
-
-For questions or issues, please open an issue on GitHub.
