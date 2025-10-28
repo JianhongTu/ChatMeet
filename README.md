@@ -37,38 +37,17 @@ git lfs pull
 
 ### 3. Set Up Environment Variables
 
-#### Create your `.env` file:
-```bash
-cp .env.example .env
-```
+#### Add your Hugging Face token to Xcode Scheme:
 
-#### Add your Hugging Face token:
-1. Get your token from: https://huggingface.co/settings/tokens
-2. Open `.env` and replace `your_token_here` with your actual token:
-   ```
-   HF_TOKEN=hf_your_actual_token_here
-   ```
+1. In Xcode, click on the scheme selector (next to the run/stop buttons)
+2. Select **"Edit Scheme..."** (or press **Cmd+<**)
+3. In the left sidebar, select **Run**
+4. Go to the **Arguments** tab
+5. Under **Environment Variables**, find the `HF_TOKEN` entry
+6. Double-click the **Value** field and paste your token from https://huggingface.co/settings/tokens
+7. Click **Close**
 
-#### Configure Xcode Build Phase:
-
-1. Open **ChatMeet.xcodeproj** in Xcode
-2. Select the **ChatMeet** target (blue icon at top)
-3. Go to **Build Phases** tab
-4. Click **+** → **New Run Script Phase**
-5. Rename it to: `Generate Environment Variables`
-6. **Drag it to run BEFORE "Compile Sources"** ⚠️ Important!
-7. Paste this script:
-   ```bash
-   "${SRCROOT}/scripts/generate-env.sh"
-   ```
-8. Under **Input Files**, add:
-   ```
-   $(SRCROOT)/.env
-   ```
-9. Under **Output Files**, add:
-   ```
-   $(SRCROOT)/ChatMeet/Environment.swift
-   ```
+> **Note:** Each developer needs to add their own token in their local Xcode scheme. The scheme file in git has an empty value for security.
 
 ### 4. Build and Run
 
@@ -143,23 +122,6 @@ Models are stored using Git LFS and automatically loaded at runtime.
 - ✅ Tokens never committed to version control
 - ✅ Audio recordings stay local
 
-## Contributing
-
-Contributions are welcome! Please feel free to submit a Pull Request.
-
-## License
-
-This project is for demonstration purposes. Please check the licenses of the underlying models:
-- Whisper: MIT License
-- Llama 3.2: Meta's Llama Community License
-
-## Acknowledgments
-
-- [OpenAI Whisper](https://github.com/openai/whisper) - Speech recognition model
-- [Meta Llama](https://github.com/meta-llama/llama) - Language model
-- [Hugging Face](https://huggingface.co/) - Model hosting and transformers library
-- [swift-transformers](https://github.com/huggingface/swift-transformers) - Swift bindings
-
 ## Troubleshooting
 
 ### Models not loading on iOS
@@ -177,9 +139,7 @@ This project is for demonstration purposes. Please check the licenses of the und
 - Check that all Swift packages are resolved
 - Verify Xcode 16+ is installed
 
-For detailed setup instructions, see:
-- [Xcode Configuration Guide](XCODE_ENV_SETUP.md)
-- [Dependencies](ADD_DEPENDENCIES.md)
+For detailed information, see [Dependencies](ADD_DEPENDENCIES.md)
 
 ## Contact
 
