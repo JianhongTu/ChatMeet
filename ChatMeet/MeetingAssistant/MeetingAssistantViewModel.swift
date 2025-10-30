@@ -23,6 +23,7 @@ class MeetingAssistantViewModel: ObservableObject {
     @Published public var timeToFirstToken: TimeInterval = 0
     @Published public var summarizationTime: TimeInterval = 0
     @Published public var totalProcessingTime: TimeInterval = 0
+    @Published public var tokensPerSecond: Double = 0
     
     private let audioRecorder = AudioRecorder()
     private let transcriptionService = TranscriptionService()
@@ -33,6 +34,7 @@ class MeetingAssistantViewModel: ObservableObject {
     private var transcriptionStartTime: Date?
     private var summarizationStartTime: Date?
     private var firstTokenTime: Date?
+    private var tokenCount: Int = 0
     
     public init() {}
     
@@ -63,6 +65,8 @@ class MeetingAssistantViewModel: ObservableObject {
                     self.timeToFirstToken = 0
                     self.summarizationTime = 0
                     self.totalProcessingTime = 0
+                    self.tokensPerSecond = 0
+                    self.tokenCount = 0
                     
                     // Start recording
                     self.audioRecorder.startRecording()
@@ -120,11 +124,6 @@ class MeetingAssistantViewModel: ObservableObject {
             transcription = "Please record some audio before stopping"
             return
         }
-        
-        // Show audio info
-        let duration = recordingDuration
-        let sizeKB = Double(audioData.count) / 1024.0
-        print("Captured audio: \(String(format: "%.1f", duration))s, \(String(format: "%.1f", sizeKB)) KB")
         
         Task {
             await processAudio(audioData)
@@ -186,6 +185,7 @@ class MeetingAssistantViewModel: ObservableObject {
         isSummarizing = true
         summary = ""
         firstTokenTime = nil
+        tokenCount = 0
         
         // Summarize transcription with real-time streaming
         statusMessage = "Generating summary..."
@@ -204,6 +204,10 @@ class MeetingAssistantViewModel: ObservableObject {
                         }
                     }
                     
+                    // Estimate token count (rough approximation: words / 0.75)
+                    let wordCount = partialSummary.split(separator: " ").count
+                    self.tokenCount = Int(Double(wordCount) / 0.75)
+                    
                     self.summary = partialSummary
                 }
             }
@@ -218,9 +222,14 @@ class MeetingAssistantViewModel: ObservableObject {
                 totalProcessingTime = Date().timeIntervalSince(startTime)
             }
             
+            // Calculate tokens per second
+            if summarizationTime > 0 {
+                tokensPerSecond = Double(tokenCount) / summarizationTime
+            }
+            
             // Update final summary text box
             summary = summaryText
-            statusMessage = String(format: "Complete! (%.1fs total)", totalProcessingTime)
+            statusMessage = String(format: "Complete! (%.1fs total, %.1f tok/s)", totalProcessingTime, tokensPerSecond)
         } catch {
             statusMessage = "Error generating summary: \(error.localizedDescription)"
             if summary.isEmpty {
@@ -296,9 +305,6 @@ class MeetingAssistantViewModel: ObservableObject {
             transcription = "Error: The audio file appears to be empty"
             return
         }
-        
-        let sizeKB = Double(audioData.count) / 1024.0
-        print("Processed uploaded file: \(String(format: "%.1f", sizeKB)) KB")
         
         // Process through transcription pipeline
         await processAudio(audioData)

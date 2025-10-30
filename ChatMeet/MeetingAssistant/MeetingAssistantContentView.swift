@@ -262,6 +262,8 @@ struct MeetingAssistantContentView: View {
                 Divider().frame(height: 30)
                 statisticItem(label: "Summarization", value: formatTime(viewModel.summarizationTime))
                 Divider().frame(height: 30)
+                statisticItem(label: "Tokens/Sec", value: String(format: "%.1f", viewModel.tokensPerSecond))
+                Divider().frame(height: 30)
                 statisticItem(label: "Total", value: formatTime(viewModel.totalProcessingTime), highlight: true)
             }
             .padding(.horizontal, 16)
@@ -280,7 +282,11 @@ struct MeetingAssistantContentView: View {
                     Spacer()
                     statisticItem(label: "Summarization", value: formatTime(viewModel.summarizationTime))
                 }
-                statisticItem(label: "Total Processing", value: formatTime(viewModel.totalProcessingTime), highlight: true)
+                HStack {
+                    statisticItem(label: "Tok/Sec", value: String(format: "%.1f", viewModel.tokensPerSecond))
+                    Spacer()
+                    statisticItem(label: "Total Processing", value: formatTime(viewModel.totalProcessingTime), highlight: true)
+                }
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 8)

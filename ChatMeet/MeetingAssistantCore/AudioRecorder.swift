@@ -66,12 +66,7 @@ class AudioRecorder: @unchecked Sendable {
             audioRecorder = try AVAudioRecorder(url: url, settings: settings)
             audioRecorder?.prepareToRecord()
             
-            let success = audioRecorder?.record() ?? false
-            if success {
-                print("AudioRecorder: Started recording to \(url.lastPathComponent)")
-            } else {
-                print("AudioRecorder: Failed to start recording")
-            }
+            audioRecorder?.record()
         } catch {
             print("AudioRecorder: Error starting recording: \(error)")
         }
@@ -84,21 +79,17 @@ class AudioRecorder: @unchecked Sendable {
         
         // Save the recording URL for playback
         lastRecordingURL = recordingURL
-        
-        print("AudioRecorder: Recording stopped")
     }
     
     /// Get the audio data from the last recording
     /// - Returns: Audio data in WAV format, or nil if no recording available
     public func getRecordingData() -> Data? {
         guard let url = recordingURL else {
-            print("AudioRecorder: No recording URL available")
             return nil
         }
         
         do {
             let audioData = try Data(contentsOf: url)
-            print("AudioRecorder: Successfully read \(audioData.count) bytes from recording")
             return audioData
         } catch {
             print("AudioRecorder: Error reading audio file: \(error)")
@@ -160,7 +151,6 @@ class AudioRecorder: @unchecked Sendable {
             
             audioPlayer = try AVAudioPlayer(contentsOf: url)
             audioPlayer?.play()
-            print("AudioRecorder: Playing recording from \(url.lastPathComponent)")
         } catch {
             print("AudioRecorder: Error playing recording: \(error)")
         }
@@ -179,8 +169,6 @@ class AudioRecorder: @unchecked Sendable {
             print("AudioRecorder: Error switching back to record mode: \(error)")
         }
         #endif
-        
-        print("AudioRecorder: Playback stopped")
     }
     
     /// Check if audio is currently playing
@@ -297,7 +285,6 @@ class AudioRecorder: @unchecked Sendable {
             // Save for playback
             lastRecordingURL = outputURL
             
-            print("AudioRecorder: Successfully converted M4A to WAV (\(wavData.count) bytes)")
             return wavData
             
         } catch {
@@ -311,8 +298,6 @@ class AudioRecorder: @unchecked Sendable {
     /// - Parameter fileURL: URL of the uploaded audio file
     /// - Returns: Audio data in WAV format, or nil if processing failed
     public func processUploadedFile(fileURL: URL) async -> Data? {
-        print("AudioRecorder: Processing uploaded file: \(fileURL.lastPathComponent)")
-        
         // Check file extension
         let fileExtension = fileURL.pathExtension.lowercased()
         
@@ -324,7 +309,6 @@ class AudioRecorder: @unchecked Sendable {
             do {
                 let data = try Data(contentsOf: fileURL)
                 lastRecordingURL = fileURL
-                print("AudioRecorder: Read WAV file (\(data.count) bytes)")
                 return data
             } catch {
                 print("AudioRecorder: Error reading WAV file: \(error)")

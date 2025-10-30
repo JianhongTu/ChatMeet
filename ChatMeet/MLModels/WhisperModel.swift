@@ -39,58 +39,34 @@ class WhisperModel: @unchecked Sendable {
         
         // Load encoder model
         // Note: Models should be placed in MLModels/ directory
-        // and added as resources in Package.swift
         do {
             if let encoderURL = findModelURL(named: encoderModelName) {
-                print("WhisperModel: Found encoder at: \(encoderURL.path)")
                 encoderModel = try MLModel(contentsOf: encoderURL, configuration: config)
-                print("WhisperModel: ✓ Successfully loaded encoder model with GPU acceleration")
-                print("WhisperModel: Compute units: .cpuAndGPU")
             } else {
-                print("WhisperModel: ✗ Encoder model not found")
-                print("WhisperModel: Looking for: \(encoderModelName).mlmodelc or \(encoderModelName).mlpackage")
-                print("WhisperModel: Search paths:")
-                print("  - Main bundle resources")
-                print("  - Add \(encoderModelName).mlmodel to MLModels/ and rebuild")
+                print("WhisperModel: ✗ Encoder model not found (\(encoderModelName))")
             }
         } catch {
-            print("WhisperModel: ✗ Failed to load encoder model")
-            print("WhisperModel: Error: \(error)")
-            print("WhisperModel: Error details: \(error.localizedDescription)")
+            print("WhisperModel: ✗ Failed to load encoder model: \(error.localizedDescription)")
         }
         
         // Load decoder model
         do {
             if let decoderURL = findModelURL(named: decoderModelName) {
-                print("WhisperModel: Found decoder at: \(decoderURL.path)")
                 decoderModel = try MLModel(contentsOf: decoderURL, configuration: config)
-                print("WhisperModel: ✓ Successfully loaded decoder model with GPU acceleration")
-                print("WhisperModel: Compute units: .cpuAndGPU")
             } else {
-                print("WhisperModel: ✗ Decoder model not found")
-                print("WhisperModel: Looking for: \(decoderModelName).mlmodelc or \(decoderModelName).mlpackage")
-                print("WhisperModel: Search paths:")
-                print("  - Main bundle resources")
-                print("  - Add \(decoderModelName).mlmodel to MLModels/ and rebuild")
+                print("WhisperModel: ✗ Decoder model not found (\(decoderModelName))")
             }
         } catch {
-            print("WhisperModel: ✗ Failed to load decoder model")
-            print("WhisperModel: Error: \(error)")
-            print("WhisperModel: Error details: \(error.localizedDescription)")
+            print("WhisperModel: ✗ Failed to load decoder model: \(error.localizedDescription)")
         }
         
         // Load tokenizer from Hugging Face
         Task { [weak self] in
             guard let self = self else { return }
             do {
-                print("WhisperModel: Loading tokenizer from '\(self.modelName)'...")
                 self.tokenizer = try await AutoTokenizer.from(pretrained: self.modelName)
-                print("WhisperModel: ✓ Successfully loaded tokenizer")
             } catch {
-                print("WhisperModel: ✗ Failed to load tokenizer")
-                print("WhisperModel: Error: \(error)")
-                print("WhisperModel: Error details: \(error.localizedDescription)")
-                print("WhisperModel: Note: Tokenizer requires internet connection on first load")
+                print("WhisperModel: ✗ Failed to load tokenizer: \(error.localizedDescription)")
             }
         }
     }
@@ -99,41 +75,19 @@ class WhisperModel: @unchecked Sendable {
     /// - Parameter named: Model name without extension
     /// - Returns: URL to compiled model if found
     private func findModelURL(named: String) -> URL? {
-        print("WhisperModel: Searching for model '\(named)'...")
-        
         // Try to find in main bundle resources (compiled .mlmodelc)
         if let url = Bundle.main.url(forResource: named, withExtension: "mlmodelc") {
-            print("WhisperModel: Found .mlmodelc at: \(url.path)")
             return url
         }
         
         // Try to find .mlpackage
         if let url = Bundle.main.url(forResource: named, withExtension: "mlpackage") {
-            print("WhisperModel: Found .mlpackage at: \(url.path)")
             return url
         }
         
         // Try without extension (sometimes Xcode compiles differently)
         if let url = Bundle.main.url(forResource: named, withExtension: nil) {
-            print("WhisperModel: Found model (no extension) at: \(url.path)")
             return url
-        }
-        
-        print("WhisperModel: Model '\(named)' not found in bundle")
-        print("WhisperModel: Bundle path: \(Bundle.main.bundlePath)")
-        print("WhisperModel: Available resources:")
-        if let resourcePath = Bundle.main.resourcePath {
-            do {
-                let contents = try FileManager.default.contentsOfDirectory(atPath: resourcePath)
-                let mlModels = contents.filter { $0.contains(".ml") }
-                if mlModels.isEmpty {
-                    print("  - No .ml files found")
-                } else {
-                    mlModels.forEach { print("  - \($0)") }
-                }
-            } catch {
-                print("  - Could not list resources: \(error)")
-            }
         }
         
         return nil
@@ -393,8 +347,6 @@ class WhisperModel: @unchecked Sendable {
             mlArray[[0, i] as [NSNumber]] = NSNumber(value: sample)
         }
         
-        print("WhisperModel: Created audio input with shape: [\(shape[0]), \(shape[1])]")
-        
         return mlArray
     }
     
@@ -416,8 +368,6 @@ class WhisperModel: @unchecked Sendable {
         guard let encoderOutput = output.featureValue(for: outputName)?.multiArrayValue else {
             throw WhisperError.inferenceFailed("Failed to extract encoder output")
         }
-        
-        print("WhisperModel: Encoder output shape: \(encoderOutput.shape)")
         
         return encoderOutput
     }
@@ -465,8 +415,6 @@ class WhisperModel: @unchecked Sendable {
             
             // Get most probable token (greedy decoding)
             let nextToken = argmax(logits)
-
-            print("WhisperModel: Generated token ID: \(nextToken)")
             
             // Check for end of transcription
             if nextToken == eotTokenId {

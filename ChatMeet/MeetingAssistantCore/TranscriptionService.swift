@@ -30,8 +30,6 @@ class TranscriptionService: @unchecked Sendable {
             throw TranscriptionError.audioTooShort
         }
         
-        print("TranscriptionService: Starting transcription (\(audioData.count) bytes)")
-        
         // Process through Whisper model
         do {
             let transcription = try await whisperModel.transcribe(audioData)
@@ -41,7 +39,6 @@ class TranscriptionService: @unchecked Sendable {
                 throw TranscriptionError.noSpeechDetected
             }
             
-            print("TranscriptionService: Transcription complete (\(transcription.count) characters)")
             return transcription
             
         } catch let error as WhisperError {

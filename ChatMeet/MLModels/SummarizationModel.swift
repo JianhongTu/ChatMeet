@@ -79,8 +79,6 @@ class SummarizationModel: @unchecked Sendable {
         // Create Llama 3.2 Instruct prompt with system message
         let prompt = createLlamaPrompt(for: text)
         
-        print("SummarizationModel: Starting generation...")
-        
         // Configure generation parameters - constrained to ~128 words
         let generationConfig = GenerationConfig(maxNewTokens: 128)
         
@@ -99,8 +97,6 @@ class SummarizationModel: @unchecked Sendable {
             
             // Extract final generated text (removing prompt)
             let summary = extractSummary(from: output, prompt: prompt)
-            
-            print("SummarizationModel: ✓ Generation complete")
             
             return summary
         } catch {
@@ -150,24 +146,15 @@ class SummarizationModel: @unchecked Sendable {
     private func extractSummary(from output: String, prompt: String) -> String {
         var summary = output
         
-        // Debug: log what we're working with
-        #if DEBUG
-        print("SummarizationModel: Raw output length: \(output.count)")
-        print("SummarizationModel: Prompt length: \(prompt.count)")
-        print("SummarizationModel: Output starts with prompt: \(output.hasPrefix(prompt))")
-        #endif
-        
         // Remove the prompt prefix if present
         if summary.hasPrefix(prompt) {
             summary = String(summary.dropFirst(prompt.count))
-            print("SummarizationModel: Removed exact prompt match")
         } else {
             // Try to find the assistant header as a fallback
             // Sometimes the model output doesn't include the full prompt
             let assistantHeader = "<|start_header_id|>assistant<|end_header_id|>"
             if let range = summary.range(of: assistantHeader) {
                 summary = String(summary[range.upperBound...])
-                print("SummarizationModel: Removed content up to assistant header")
             }
         }
         
@@ -181,13 +168,6 @@ class SummarizationModel: @unchecked Sendable {
         
         // Trim whitespace and newlines
         summary = summary.trimmingCharacters(in: .whitespacesAndNewlines)
-        
-        #if DEBUG
-        print("SummarizationModel: Final summary length: \(summary.count)")
-        if summary.count < 200 {
-            print("SummarizationModel: Final summary: \(summary)")
-        }
-        #endif
         
         return summary
     }
