@@ -94,23 +94,24 @@ class WhisperModel: @unchecked Sendable {
     }
     
     /// Transcribe audio data to text
-    /// - Parameter audioData: Raw audio data in WAV format (16kHz, mono, PCM)
-    /// - Returns: Transcribed text
-    public func transcribe(_ audioData: Data) async throws -> String {
-        // Extract raw PCM samples from WAV
-        let samples = try extractPCMSamples(from: audioData)
-        
-        // Pad or trim to 480,000 samples (30 seconds at 16kHz)
-        let paddedSamples = padOrTrim(samples, to: expectedSamples)
-        
-        // Convert to MLMultiArray [1, 480000]
-        let audioInput = try convertToMLMultiArray(paddedSamples)
-        
-        // Run encoder (now includes preprocessing)
+    /// - Parameters:
+    ///   - audioData: Raw audio data in WAV format (16kHz, mono, PCM)
+    ///   - onProgress: Optional callback for real-time token streaming
+    /// - Returns: Final transcribed text
+    public func transcribe(_ audioData: Data, onProgress: (@Sendable (String) -> Void)? = nil) async throws -> String {
+        // Wait for models to be loaded
         guard let encoder = encoderModel else {
             throw WhisperError.modelNotLoaded
         }
         
+        // Extract PCM samples from WAV data
+        let samples = try extractPCMSamples(from: audioData)
+        
+        // Pad/trim to expected length and convert to MLMultiArray
+        let paddedSamples = padOrTrim(samples, to: expectedSamples)
+        let audioInput = try convertToMLMultiArray(paddedSamples)
+        
+        // Run encoder to get audio features
         let encoderOutput = try runEncoder(encoder, input: audioInput)
         
         // Run decoder with tokenizer to generate text
@@ -118,7 +119,7 @@ class WhisperModel: @unchecked Sendable {
             throw WhisperError.modelNotLoaded
         }
         
-        let transcription = try await runDecoder(decoder, encoderOutput: encoderOutput, tokenizer: tokenizer)
+        let transcription = try await runDecoder(decoder, encoderOutput: encoderOutput, tokenizer: tokenizer, onProgress: onProgress)
         
         return transcription
     }
@@ -378,7 +379,7 @@ class WhisperModel: @unchecked Sendable {
     ///   - encoderOutput: Output from encoder
     ///   - tokenizer: Tokenizer for decoding
     /// - Returns: Transcribed text
-    private func runDecoder(_ decoder: MLModel, encoderOutput: MLMultiArray, tokenizer: Tokenizer) async throws -> String {
+    private func runDecoder(_ decoder: MLModel, encoderOutput: MLMultiArray, tokenizer: Tokenizer, onProgress: (@Sendable (String) -> Void)? = nil) async throws -> String {
         // Special tokens for Whisper
         // Whisper uses specific token IDs - these may need adjustment based on actual model
         let startTokenId = 50258  // <|startoftranscript|>
@@ -423,6 +424,12 @@ class WhisperModel: @unchecked Sendable {
             
             generatedTokens.append(nextToken)
             isPrefill = false
+            
+            // Stream partial transcription if callback is provided
+            if let onProgress = onProgress {
+                let partialTranscription = decodeTokens(generatedTokens, using: tokenizer)
+                onProgress(partialTranscription)
+            }
         }
         
         // Decode tokens to text

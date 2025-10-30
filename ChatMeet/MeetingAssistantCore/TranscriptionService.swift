@@ -17,9 +17,11 @@ class TranscriptionService: @unchecked Sendable {
     }
     
     /// Transcribe audio data to text
-    /// - Parameter audioData: Raw audio data to transcribe (16kHz WAV format)
-    /// - Returns: Transcribed text
-    public func transcribe(_ audioData: Data) async throws -> String {
+    /// - Parameters:
+    ///   - audioData: Raw audio data to transcribe (16kHz WAV format)
+    ///   - onProgress: Optional callback for real-time token streaming
+    /// - Returns: Final transcribed text
+    public func transcribe(_ audioData: Data, onProgress: (@Sendable (String) -> Void)? = nil) async throws -> String {
         // Validate audio data
         guard !audioData.isEmpty else {
             throw TranscriptionError.emptyAudioData
@@ -30,9 +32,9 @@ class TranscriptionService: @unchecked Sendable {
             throw TranscriptionError.audioTooShort
         }
         
-        // Process through Whisper model
+        // Process through Whisper model with streaming
         do {
-            let transcription = try await whisperModel.transcribe(audioData)
+            let transcription = try await whisperModel.transcribe(audioData, onProgress: onProgress)
             
             // Validate we got some output
             guard !transcription.isEmpty else {

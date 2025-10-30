@@ -139,18 +139,24 @@ class MeetingAssistantViewModel: ObservableObject {
         // Start overall processing timer
         processingStartTime = Date()
         
-        // Transcribe audio
+        // Transcribe audio with live streaming
         statusMessage = "Transcribing audio..."
         transcriptionStartTime = Date()
         do {
-            let transcribedText = try await transcriptionService.transcribe(audioData)
+            let transcribedText = try await transcriptionService.transcribe(audioData) { [weak self] partialText in
+                // Stream partial transcription to UI in real-time
+                guard let self = self else { return }
+                Task { @MainActor in
+                    self.transcription = partialText
+                }
+            }
             
             // Calculate transcription time
             if let startTime = transcriptionStartTime {
                 transcriptionTime = Date().timeIntervalSince(startTime)
             }
             
-            // Update transcription text box
+            // Update with final transcription
             transcription = transcribedText
             
             // Check if we got transcription
