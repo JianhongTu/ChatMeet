@@ -32,6 +32,8 @@ struct MeetingAssistantContentView: View {
                     .font(.system(size: 28, weight: .semibold))
                     .foregroundColor(.primary)
                 
+                streamingModeToggle
+                
                 HStack(spacing: 12) {
                     recordButton
                     playbackButton
@@ -73,6 +75,11 @@ struct MeetingAssistantContentView: View {
                     .font(.system(size: 24, weight: .semibold))
                     .foregroundColor(.primary)
                 
+                // Streaming mode toggle
+                streamingModeToggle
+                    .padding(.horizontal, 20)
+                    .padding(.bottom, 8)
+                
                 // Buttons stacked vertically
                 VStack(spacing: 10) {
                     recordButton
@@ -107,6 +114,21 @@ struct MeetingAssistantContentView: View {
     }
     
     // MARK: - Reusable Components
+    
+    private var streamingModeToggle: some View {
+        Toggle(isOn: $viewModel.isStreamingMode) {
+            HStack(spacing: 6) {
+                Image(systemName: "waveform.circle.fill")
+                    .font(.system(size: 14))
+                Text("Real-time Streaming Mode")
+                    .font(.system(size: 13))
+            }
+        }
+        .disabled(viewModel.isRecording || viewModel.isPlaying)
+        #if os(macOS)
+        .toggleStyle(.switch)
+        #endif
+    }
     
     private var recordButton: some View {
         Button(action: {

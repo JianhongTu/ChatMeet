@@ -11,6 +11,10 @@ import Foundation
 class TranscriptionService: @unchecked Sendable {
     
     private let whisperModel: WhisperModel
+    private var streamingProcessor: StreamingAudioProcessor?
+    private var streamingContext: StreamingTranscriptionContext?
+    private var isStreaming = false
+    private var cumulativeTranscription = ""
     
     public init() {
         self.whisperModel = WhisperModel()
@@ -50,6 +54,89 @@ class TranscriptionService: @unchecked Sendable {
             throw TranscriptionError.transcriptionFailed(error.localizedDescription)
         }
     }
+    
+    /// Start real-time streaming transcription with sliding window and KV cache reuse
+    /// - Parameters:
+    ///   - onUpdate: Callback invoked with cumulative transcription updates
+    public func startStreamingTranscription(onUpdate: @escaping @Sendable (String) -> Void) throws {
+        guard !isStreaming else {
+            throw TranscriptionError.alreadyStreaming
+        }
+        
+        isStreaming = true
+        cumulativeTranscription = ""
+        
+        // Create streaming context to maintain decoder state across chunks
+        streamingContext = StreamingTranscriptionContext()
+        
+        streamingProcessor = StreamingAudioProcessor()
+        
+        // Start streaming with 5-second chunk processing
+        try streamingProcessor?.startStreaming { [weak self] audioChunk in
+            guard let self = self, let context = self.streamingContext else { return }
+            
+            // Process each chunk incrementally through Whisper
+            Task { @MainActor in
+                do {
+                    let totalContextTokens = context.committedTokens.count + context.contextTokens.count
+                    print("🟢 TranscriptionService: Processing new audio chunk (total context: \(totalContextTokens) tokens)")
+                    
+                    // Track the base transcription at start of chunk
+                    let baseTranscription = self.cumulativeTranscription
+                    let needsSpace = !baseTranscription.isEmpty
+                    
+                    // Get only NEW text from this chunk with token-by-token streaming
+                    let newText = try await self.whisperModel.transcribeIncremental(
+                        audioData: audioChunk,
+                        context: context,
+                        onProgress: { partialText in
+                            // Stream each token update with cumulative text
+                            var streamedText = baseTranscription
+                            if needsSpace {
+                                streamedText += " "
+                            }
+                            streamedText += partialText
+                            onUpdate(streamedText)
+                        }
+                    )
+                    
+                    print("🟢 TranscriptionService: Chunk produced \(newText.count) characters of new text")
+                    
+                    // Update final cumulative transcription
+                    if !newText.isEmpty {
+                        // Add space between chunks if there's already content
+                        if !self.cumulativeTranscription.isEmpty {
+                            self.cumulativeTranscription += " "
+                        }
+                        self.cumulativeTranscription += newText
+                        print("🟢 TranscriptionService: Updated UI with cumulative text (\(self.cumulativeTranscription.count) chars total)")
+                    } else {
+                        print("⚠️ TranscriptionService: Chunk produced NO new text")
+                    }
+                    
+                } catch {
+                    // Continue processing even if one chunk fails
+                    print("❌ TranscriptionService: Chunk processing failed: \(error)")
+                }
+            }
+        }
+    }
+    
+    /// Stop real-time streaming transcription
+    public func stopStreamingTranscription() {
+        guard isStreaming else { return }
+        
+        streamingProcessor?.stopStreaming()
+        streamingProcessor = nil
+        streamingContext = nil
+        cumulativeTranscription = ""
+        isStreaming = false
+    }
+    
+    /// Check if currently streaming
+    public var isCurrentlyStreaming: Bool {
+        return isStreaming
+    }
 }
 
 /// Errors that can occur during transcription
@@ -59,6 +146,7 @@ public enum TranscriptionError: LocalizedError {
     case noSpeechDetected
     case modelNotLoaded
     case transcriptionFailed(String)
+    case alreadyStreaming
     
     public var errorDescription: String? {
         switch self {
@@ -72,6 +160,8 @@ public enum TranscriptionError: LocalizedError {
             return "Whisper model is not loaded"
         case .transcriptionFailed(let reason):
             return "Transcription failed: \(reason)"
+        case .alreadyStreaming:
+            return "Streaming transcription is already active"
         }
     }
 }

@@ -17,6 +17,7 @@ class MeetingAssistantViewModel: ObservableObject {
     @Published public var summary: String = "Summary bullet points will appear here..."
     @Published public var recordingDuration: TimeInterval = 0
     @Published public var isSummarizing: Bool = false
+    @Published public var isStreamingMode: Bool = false  // Toggle for streaming vs batch mode
     
     // Performance statistics
     @Published public var transcriptionTime: TimeInterval = 0
@@ -35,6 +36,8 @@ class MeetingAssistantViewModel: ObservableObject {
     private var summarizationStartTime: Date?
     private var firstTokenTime: Date?
     private var tokenCount: Int = 0
+    private var streamingBuffer: String = ""  // Accumulates streaming transcriptions
+    private var streamingStartTime: Date?  // Track streaming recording start time
     
     public init() {}
     
@@ -59,6 +62,7 @@ class MeetingAssistantViewModel: ObservableObject {
                     self.transcription = ""
                     self.summary = ""
                     self.recordingDuration = 0
+                    self.streamingBuffer = ""
                     
                     // Reset statistics
                     self.transcriptionTime = 0
@@ -68,8 +72,12 @@ class MeetingAssistantViewModel: ObservableObject {
                     self.tokensPerSecond = 0
                     self.tokenCount = 0
                     
-                    // Start recording
-                    self.audioRecorder.startRecording()
+                    // Start recording based on mode
+                    if self.isStreamingMode {
+                        self.startStreamingRecording()
+                    } else {
+                        self.audioRecorder.startRecording()
+                    }
                     
                     // Start timer to update recording duration
                     self.startRecordingTimer()
@@ -88,7 +96,18 @@ class MeetingAssistantViewModel: ObservableObject {
         recordingTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
             Task { @MainActor in
                 guard let self = self, self.isRecording else { return }
-                self.recordingDuration = self.audioRecorder.recordingDuration
+                
+                // Update duration based on mode
+                if self.isStreamingMode {
+                    // Calculate duration from start time
+                    if let startTime = self.streamingStartTime {
+                        self.recordingDuration = Date().timeIntervalSince(startTime)
+                    }
+                } else {
+                    // Use audio recorder's duration
+                    self.recordingDuration = self.audioRecorder.recordingDuration
+                }
+                
                 self.updateRecordingStatus()
             }
         }
@@ -101,6 +120,30 @@ class MeetingAssistantViewModel: ObservableObject {
         statusMessage = String(format: "Recording... %d:%02d", minutes, seconds)
     }
     
+    /// Start streaming recording with real-time transcription
+    private func startStreamingRecording() {
+        statusMessage = "Streaming transcription active..."
+        transcriptionStartTime = Date()
+        processingStartTime = Date()
+        streamingStartTime = Date()  // Track streaming start time
+        
+        do {
+            try transcriptionService.startStreamingTranscription(
+                onUpdate: { [weak self] newTranscription in
+                    guard let self = self else { return }
+                    Task { @MainActor in
+                        // Update transcription in real-time
+                        self.transcription = newTranscription
+                        self.streamingBuffer = newTranscription
+                    }
+                }
+            )
+        } catch {
+            statusMessage = "Failed to start streaming: \(error.localizedDescription)"
+            isRecording = false
+        }
+    }
+    
     /// Stop audio recording and process the audio
     private func stopRecording() {
         // Stop the recording timer
@@ -108,25 +151,45 @@ class MeetingAssistantViewModel: ObservableObject {
         recordingTimer = nil
         
         isRecording = false
-        statusMessage = "Processing audio..."
         
-        // Stop recording and get audio data
-        audioRecorder.stopRecording()
-        guard let audioData = audioRecorder.getRecordingData() else {
-            statusMessage = "Failed to capture audio"
-            transcription = "Error: Could not read recorded audio file"
-            return
-        }
-        
-        // Verify we have audio data
-        guard !audioData.isEmpty else {
-            statusMessage = "No audio recorded"
-            transcription = "Please record some audio before stopping"
-            return
-        }
-        
-        Task {
-            await processAudio(audioData)
+        if isStreamingMode {
+            // Stop streaming transcription
+            transcriptionService.stopStreamingTranscription()
+            
+            // Calculate final statistics
+            if let startTime = transcriptionStartTime {
+                transcriptionTime = Date().timeIntervalSince(startTime)
+            }
+            if let startTime = processingStartTime {
+                totalProcessingTime = Date().timeIntervalSince(startTime)
+            }
+            
+            // Clear streaming start time
+            streamingStartTime = nil
+            
+            statusMessage = "Streaming complete. Ready for next recording."
+        } else {
+            // Original batch mode
+            statusMessage = "Processing audio..."
+            
+            // Stop recording and get audio data
+            audioRecorder.stopRecording()
+            guard let audioData = audioRecorder.getRecordingData() else {
+                statusMessage = "Failed to capture audio"
+                transcription = "Error: Could not read recorded audio file"
+                return
+            }
+            
+            // Verify we have audio data
+            guard !audioData.isEmpty else {
+                statusMessage = "No audio recorded"
+                transcription = "Please record some audio before stopping"
+                return
+            }
+            
+            Task {
+                await processAudio(audioData)
+            }
         }
     }
     
