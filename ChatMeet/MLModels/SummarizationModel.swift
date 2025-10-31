@@ -66,7 +66,67 @@ class SummarizationModel: @unchecked Sendable {
         return nil
     }
     
-    /// Generate bullet point summary from transcribed text
+    /// Agentic workflow: Analyze new transcript and decide summary actions
+    /// - Parameters:
+    ///   - newText: New transcript text to analyze
+    ///   - currentBulletPoints: Current bullet points in summary
+    ///   - onProgress: Optional callback for real-time streaming
+    /// - Returns: Array of actions to perform on the summary
+    public func analyzeAndDecide(newText: String, currentBulletPoints: [SummaryBulletPoint], onProgress: (@Sendable (String) -> Void)? = nil) async throws -> [SummaryAction] {
+        guard let model = model else {
+            throw SummarizationError.modelNotLoaded
+        }
+        
+        // Create agentic prompt
+        let prompt = createAgenticPrompt(newText: newText, currentBulletPoints: currentBulletPoints)
+        
+        // DEBUG: Print full prompt
+        print(String(repeating: "=", count: 80))
+        print("🤖 SummarizationModel: INPUT PROMPT TO LLM:")
+        print(String(repeating: "-", count: 80))
+        print(prompt)
+        print(String(repeating: "=", count: 80))
+        
+        // Configure generation - allow more tokens for actions without sampling
+        let generationConfig = GenerationConfig(maxNewTokens: 256)
+        
+        do {
+            // Generate actions with streaming
+            let output = try await model.generate(
+                config: generationConfig,
+                prompt: prompt
+            ) { partialResult in
+                if let onProgress = onProgress {
+                    let cleaned = self.extractSummary(from: partialResult, prompt: prompt)
+                    onProgress(cleaned)
+                }
+            }
+            
+            // Extract and parse actions
+            let actionText = extractSummary(from: output, prompt: prompt)
+            
+            // DEBUG: Print full LLM output
+            print(String(repeating: "=", count: 80))
+            print("🤖 SummarizationModel: RAW LLM OUTPUT:")
+            print(String(repeating: "-", count: 80))
+            print(output)
+            print(String(repeating: "-", count: 80))
+            print("🤖 SummarizationModel: CLEANED OUTPUT:")
+            print(String(repeating: "-", count: 80))
+            print(actionText)
+            print(String(repeating: "=", count: 80))
+            
+            let actions = SummaryAction.parse(from: actionText)
+            print("🤖 SummarizationModel: Parsed \(actions.count) actions: \(actions)")
+            
+            return actions
+        } catch {
+            print("SummarizationModel: ✗ Generation failed: \(error)")
+            throw SummarizationError.generationFailed(error.localizedDescription)
+        }
+    }
+    
+    /// Generate bullet point summary from transcribed text (legacy method)
     /// - Parameters:
     ///   - text: Transcribed text to summarize
     ///   - onProgress: Optional callback for real-time token streaming
@@ -105,37 +165,39 @@ class SummarizationModel: @unchecked Sendable {
         }
     }
     
-    /// Create a Llama 3.2 Instruct formatted prompt
+    /// Create a Llama 3.2 Instruct formatted prompt (legacy for batch summarization)
     /// - Parameter text: Input text to summarize
     /// - Returns: Formatted prompt with system message
     private func createLlamaPrompt(for text: String) -> String {
-        // Llama 3.2 Instruct uses special tokens for chat format
-        // <|begin_of_text|><|start_header_id|>system<|end_header_id|>
-        // {system_message}<|eot_id|>
-        // <|start_header_id|>user<|end_header_id|>
-        // {user_message}<|eot_id|>
-        // <|start_header_id|>assistant<|end_header_id|>
-        
+        return createAgenticPrompt(newText: text, currentBulletPoints: [])
+    }
+    
+    /// Create a Llama 3.2 Instruct formatted prompt for agentic summary management
+    /// - Parameters:
+    ///   - newText: New transcript text to analyze
+    ///   - currentBulletPoints: Existing bullet points in the summary
+    /// - Returns: Formatted prompt with system message
+    private func createAgenticPrompt(newText: String, currentBulletPoints: [SummaryBulletPoint]) -> String {
         let systemMessage = """
-        You are a helpful assistant that summarizes meeting transcripts into clear, concise bullet points. \
-        Extract the key points, action items, and important decisions. \
-        Format your response as bullet points using the • character.
+        You are a helpful meeting assistant. Summarize the key points from meeting transcripts. \
+        Format your response as bullet points using markdown style.
         """
         
         let userMessage = """
-        Please summarize the following meeting transcript into bullet points:
+        Create a high-level summary of the provided transcript with one item on each line.
         
-        \(text)
+        \(newText)
         """
         
         return """
-        <|begin_of_text|><|start_header_id|>system<|end_header_id|>
-        
+        <|start_header_id|>system<|end_header_id|>
         \(systemMessage)<|eot_id|><|start_header_id|>user<|end_header_id|>
         
         \(userMessage)<|eot_id|><|start_header_id|>assistant<|end_header_id|>
         
+        • 
         """
+        // Note: do not include BOS token here. It is automatically added by the tokenizer.
     }
     
     /// Extract the generated summary from model output

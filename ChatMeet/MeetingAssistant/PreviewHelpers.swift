@@ -20,13 +20,13 @@ class MockMeetingAssistantViewModel: MeetingAssistantViewModel {
         The main topics include customer satisfaction improvements, new product features, and team expansion plans. 
         John will present the customer feedback analysis, and Sarah will cover the technical roadmap.
         """
-        vm.summary = """
-        • Quarterly planning meeting for Q4
-        • Review Q3 progress and achievements
-        • Focus areas: customer satisfaction, product features, team growth
-        • Presentations from John (customer feedback) and Sarah (technical roadmap)
-        • Action items to be distributed after meeting
-        """
+        vm.summaryBulletPoints = [
+            SummaryBulletPoint(id: 1, content: "Quarterly planning meeting for Q4"),
+            SummaryBulletPoint(id: 2, content: "Review Q3 progress and achievements"),
+            SummaryBulletPoint(id: 3, content: "Focus areas: customer satisfaction, product features, team growth"),
+            SummaryBulletPoint(id: 4, content: "Presentations from John (customer feedback) and Sarah (technical roadmap)"),
+            SummaryBulletPoint(id: 5, content: "Action items to be distributed after meeting")
+        ]
         vm.statusMessage = "Complete! Ready to record again"
         return vm
     }
@@ -36,7 +36,7 @@ class MockMeetingAssistantViewModel: MeetingAssistantViewModel {
         vm.isRecording = true
         vm.statusMessage = "Recording... Click 'Stop Recording' when finished"
         vm.transcription = ""
-        vm.summary = ""
+        vm.summaryBulletPoints = []
         return vm
     }
     
@@ -45,7 +45,7 @@ class MockMeetingAssistantViewModel: MeetingAssistantViewModel {
         vm.isRecording = false
         vm.statusMessage = "Transcribing audio..."
         vm.transcription = ""
-        vm.summary = ""
+        vm.summaryBulletPoints = []
         return vm
     }
 }

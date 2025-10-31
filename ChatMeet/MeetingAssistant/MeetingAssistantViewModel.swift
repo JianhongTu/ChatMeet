@@ -14,7 +14,8 @@ class MeetingAssistantViewModel: ObservableObject {
     @Published public var isPlaying: Bool = false
     @Published public var statusMessage: String = "Click 'Start Recording' to begin"
     @Published public var transcription: String = "Transcribed text will appear here..."
-    @Published public var summary: String = "Summary bullet points will appear here..."
+    @Published public var summaryBulletPoints: [SummaryBulletPoint] = []
+    @Published public var summaryActionLog: String = ""  // Shows LLM decision-making
     @Published public var recordingDuration: TimeInterval = 0
     @Published public var isSummarizing: Bool = false
     @Published public var isStreamingMode: Bool = false  // Toggle for streaming vs batch mode
@@ -60,9 +61,11 @@ class MeetingAssistantViewModel: ObservableObject {
                 if granted {
                     self.isRecording = true
                     self.transcription = ""
-                    self.summary = ""
+                    self.summaryBulletPoints = []
+                    self.summaryActionLog = ""
                     self.recordingDuration = 0
                     self.streamingBuffer = ""
+                    self.summaryService.reset()  // Reset summary state
                     
                     // Reset statistics
                     self.transcriptionTime = 0
@@ -197,7 +200,9 @@ class MeetingAssistantViewModel: ObservableObject {
     private func processAudio(_ audioData: Data) async {
         // Clear previous results
         transcription = ""
-        summary = ""
+        summaryBulletPoints = []
+        summaryActionLog = ""
+        summaryService.reset()
         
         // Start overall processing timer
         processingStartTime = Date()
@@ -244,7 +249,7 @@ class MeetingAssistantViewModel: ObservableObject {
         }
     }
     
-    /// Automatically summarize the current transcription text
+    /// Automatically summarize using agentic workflow
     private func automaticSummarization() async {
         // Check if there's text to summarize
         guard !transcription.isEmpty else {
@@ -252,32 +257,33 @@ class MeetingAssistantViewModel: ObservableObject {
         }
         
         isSummarizing = true
-        summary = ""
+        summaryActionLog = ""
         firstTokenTime = nil
         tokenCount = 0
         
-        // Summarize transcription with real-time streaming
-        statusMessage = "Generating summary..."
+        // Use agentic workflow to update summary
+        statusMessage = "Analyzing transcript and updating summary..."
         summarizationStartTime = Date()
         do {
-            let summaryText = try await summaryService.summarize(transcription) { [weak self] partialSummary in
-                // Update summary in real-time as tokens are generated
+            let bulletPoints = try await summaryService.updateSummary(with: transcription) { [weak self] partialActions in
+                // Show LLM decision-making in real-time
                 Task { @MainActor in
                     guard let self = self else { return }
                     
                     // Track time to first token
-                    if self.firstTokenTime == nil && !partialSummary.isEmpty {
+                    if self.firstTokenTime == nil && !partialActions.isEmpty {
                         self.firstTokenTime = Date()
                         if let startTime = self.summarizationStartTime {
                             self.timeToFirstToken = Date().timeIntervalSince(startTime)
                         }
                     }
                     
-                    // Estimate token count (rough approximation: words / 0.75)
-                    let wordCount = partialSummary.split(separator: " ").count
+                    // Estimate token count
+                    let wordCount = partialActions.split(separator: " ").count
                     self.tokenCount = Int(Double(wordCount) / 0.75)
                     
-                    self.summary = partialSummary
+                    // Show action log
+                    self.summaryActionLog = partialActions
                 }
             }
             
@@ -296,13 +302,75 @@ class MeetingAssistantViewModel: ObservableObject {
                 tokensPerSecond = Double(tokenCount) / summarizationTime
             }
             
-            // Update final summary text box
-            summary = summaryText
-            statusMessage = String(format: "Complete! (%.1fs total, %.1f tok/s)", totalProcessingTime, tokensPerSecond)
+            // Update bullet points
+            summaryBulletPoints = bulletPoints
+            statusMessage = String(format: "Complete! %d bullet points (%.1fs, %.1f tok/s)", bulletPoints.count, totalProcessingTime, tokensPerSecond)
         } catch {
             statusMessage = "Error generating summary: \(error.localizedDescription)"
-            if summary.isEmpty {
-                summary = "Failed to generate summary. Please try again."
+            if summaryBulletPoints.isEmpty {
+                summaryActionLog = "Failed to generate summary. Please try again."
+            }
+        }
+        
+        isSummarizing = false
+    }
+    
+    /// Manually trigger summarization in streaming mode
+    public func manualSummarization() async {
+        // Check if there's text to summarize
+        guard !streamingBuffer.isEmpty else {
+            statusMessage = "No transcript available to summarize"
+            return
+        }
+        
+        isSummarizing = true
+        summaryActionLog = ""
+        firstTokenTime = nil
+        tokenCount = 0
+        
+        // Use agentic workflow to update summary with streaming buffer
+        statusMessage = "Generating summary..."
+        summarizationStartTime = Date()
+        do {
+            let bulletPoints = try await summaryService.updateSummary(with: streamingBuffer) { [weak self] partialActions in
+                // Show LLM decision-making in real-time
+                Task { @MainActor in
+                    guard let self = self else { return }
+                    
+                    // Track time to first token
+                    if self.firstTokenTime == nil && !partialActions.isEmpty {
+                        self.firstTokenTime = Date()
+                        if let startTime = self.summarizationStartTime {
+                            self.timeToFirstToken = Date().timeIntervalSince(startTime)
+                        }
+                    }
+                    
+                    // Estimate token count
+                    let wordCount = partialActions.split(separator: " ").count
+                    self.tokenCount = Int(Double(wordCount) / 0.75)
+                    
+                    // Show action log
+                    self.summaryActionLog = partialActions
+                }
+            }
+            
+            // Calculate summarization time
+            if let startTime = summarizationStartTime {
+                summarizationTime = Date().timeIntervalSince(startTime)
+            }
+            
+            // Calculate tokens per second
+            if summarizationTime > 0 {
+                tokensPerSecond = Double(tokenCount) / summarizationTime
+            }
+            
+            // Update bullet points
+            summaryBulletPoints = bulletPoints
+            statusMessage = String(format: "Summary updated! %d bullet points (%.1fs, %.1f tok/s)", bulletPoints.count, summarizationTime, tokensPerSecond)
+        } catch {
+            statusMessage = "Error generating summary: \(error.localizedDescription)"
+            if summaryBulletPoints.isEmpty {
+                summaryActionLog = "Failed to generate summary. Please try again."
             }
         }
         
@@ -359,7 +427,9 @@ class MeetingAssistantViewModel: ObservableObject {
     public func processUploadedFile(fileURL: URL) async {
         statusMessage = "Processing uploaded file..."
         transcription = "Converting audio file..."
-        summary = ""
+        summaryBulletPoints = []
+        summaryActionLog = ""
+        summaryService.reset()
         
         // Convert and process the audio file
         guard let audioData = await audioRecorder.processUploadedFile(fileURL: fileURL) else {

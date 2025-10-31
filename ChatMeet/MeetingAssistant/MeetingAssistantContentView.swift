@@ -50,6 +50,7 @@ struct MeetingAssistantContentView: View {
             // Statistics panel
             if viewModel.totalProcessingTime > 0 {
                 statisticsPanel
+                    .padding(.bottom, 8)
                 Divider()
             }
             
@@ -213,11 +214,15 @@ struct MeetingAssistantContentView: View {
     
     private var transcriptionBox: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Transcription")
-                .font(.system(size: 14, weight: .semibold))
-                .foregroundColor(.secondary)
-                .padding(.horizontal, 12)
-                .padding(.top, 12)
+            HStack(alignment: .center, spacing: 8) {
+                Text("Transcription")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundColor(.secondary)
+                Spacer()
+            }
+            .frame(height: 24)
+            .padding(.horizontal, 12)
+            .padding(.top, 12)
             
             ZStack {
                 #if os(macOS)
@@ -239,11 +244,47 @@ struct MeetingAssistantContentView: View {
     
     private var summaryBox: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Summary")
-                .font(.system(size: 14, weight: .semibold))
-                .foregroundColor(.secondary)
-                .padding(.horizontal, 12)
-                .padding(.top, 12)
+            HStack(alignment: .center, spacing: 8) {
+                Text("Summary (\(viewModel.summaryBulletPoints.count) points)")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundColor(.secondary)
+                
+                if viewModel.isSummarizing {
+                    ProgressView()
+                        .scaleEffect(0.7)
+                }
+                
+                Spacer()
+                
+                // Manual summarization button for streaming mode
+                if viewModel.isStreamingMode && !viewModel.transcription.isEmpty {
+                    Button(action: {
+                        Task {
+                            await viewModel.manualSummarization()
+                        }
+                    }) {
+                        HStack(spacing: 4) {
+                            Image(systemName: "sparkles")
+                                .font(.system(size: 11))
+                            Text("Summarize")
+                                .font(.system(size: 11, weight: .medium))
+                        }
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 5)
+                        .background(Color.accentColor)
+                        .foregroundColor(.white)
+                        .cornerRadius(5)
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(viewModel.isSummarizing)
+                    .opacity(viewModel.isSummarizing ? 0.5 : 1.0)
+                    .transition(.opacity)
+                }
+            }
+            .frame(height: 24)
+            .padding(.horizontal, 12)
+            .padding(.top, 12)
+            .animation(.easeInOut(duration: 0.2), value: viewModel.isStreamingMode)
             
             ZStack {
                 #if os(macOS)
@@ -252,18 +293,75 @@ struct MeetingAssistantContentView: View {
                 Color(uiColor: .systemBackground)
                 #endif
                 
-                ScrollView {
-                    Text(viewModel.summary)
-                        .font(.system(size: 13))
+                if viewModel.summaryBulletPoints.isEmpty {
+                    // Show placeholder or action log
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 8) {
+                            if !viewModel.summaryActionLog.isEmpty {
+                                Text("LLM Decision Process:")
+                                    .font(.system(size: 11, weight: .semibold))
+                                    .foregroundColor(.secondary)
+                                Text(viewModel.summaryActionLog)
+                                    .font(.system(size: 11, design: .monospaced))
+                                    .foregroundColor(.secondary)
+                            } else {
+                                Text("Summary bullet points will appear here...")
+                                    .font(.system(size: 13))
+                                    .foregroundColor(.secondary)
+                            }
+                        }
                         .frame(maxWidth: .infinity, alignment: .topLeading)
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 8)
-                        .textSelection(.enabled)
+                        .padding(12)
+                    }
+                } else {
+                    // Show bullet points list
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 12) {
+                            ForEach(viewModel.summaryBulletPoints) { bullet in
+                                bulletPointRow(bullet: bullet)
+                            }
+                        }
+                        .padding(12)
+                    }
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+    
+    /// Individual bullet point row
+    private func bulletPointRow(bullet: SummaryBulletPoint) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            Text("•")
+                .font(.system(size: 16, weight: .bold))
+                .foregroundColor(.accentColor)
+                .padding(.top, 2)
+            
+            VStack(alignment: .leading, spacing: 4) {
+                Text(bullet.content)
+                    .font(.system(size: 13))
+                    .textSelection(.enabled)
+                
+                Text("Updated: \(formatTimestamp(bullet.updatedAt))")
+                    .font(.system(size: 10))
+                    .foregroundColor(.secondary)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(.vertical, 4)
+        .padding(.horizontal, 8)
+        .background(Color.secondary.opacity(0.05))
+        .cornerRadius(6)
+        .transition(.opacity.combined(with: .move(edge: .top)))
+        .animation(.easeInOut(duration: 0.3), value: bullet.updatedAt)
+    }
+    
+    /// Format timestamp for display
+    private func formatTimestamp(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.timeStyle = .short
+        return formatter.string(from: date)
     }
     
     // MARK: - Statistics Panel
