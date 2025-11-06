@@ -141,11 +141,11 @@ class WhisperModel: @unchecked Sendable {
             throw WhisperError.modelNotLoaded
         }
         
-        // Extract PCM samples from WAV data
-        let samples = try extractPCMSamples(from: audioData)
+        // Extract PCM samples from WAV data using AudioPreprocessor
+        let samples = try AudioPreprocessor.extractPCMSamples(from: audioData)
         
-        // Pad/trim to expected length and convert to MLMultiArray
-        let paddedSamples = padOrTrim(samples, to: expectedSamples)
+        // Pad/trim to expected length
+        let paddedSamples = AudioPreprocessor.padOrTrim(samples, to: expectedSamples)
         let audioInput = try convertToMLMultiArray(paddedSamples)
         
         // Run encoder to get audio features
@@ -179,8 +179,8 @@ class WhisperModel: @unchecked Sendable {
         context.chunkCount += 1
         print("🔵 WhisperModel: Chunk #\(context.chunkCount) - 3-stage processing")
         
-        // Extract PCM samples from WAV data (full 30s ring buffer)
-        let samples = try extractPCMSamples(from: audioData)
+        // Extract PCM samples from WAV data (full 30s ring buffer) using AudioPreprocessor
+        let samples = try AudioPreprocessor.extractPCMSamples(from: audioData)
         
         // STAGE 1: Extract the NEWEST 5 seconds (current chunk)
         let chunkDurationSeconds: Float = 5.0
@@ -253,220 +253,9 @@ class WhisperModel: @unchecked Sendable {
         return newTranscription
     }
     
-    /// Extract PCM samples from WAV data
-    /// - Parameter audioData: WAV file data
-    /// - Returns: Array of normalized float samples (mono, 16kHz)
-    private func extractPCMSamples(from audioData: Data) throws -> [Float] {
-        // Parse RIFF/WAV header
-        guard audioData.count >= 44 else {
-            throw WhisperError.preprocessingFailed
-        }
-        
-        // Verify RIFF header
-        let riffMagic = audioData.subdata(in: 0..<4)
-        guard String(data: riffMagic, encoding: .ascii) == "RIFF" else {
-            throw WhisperError.preprocessingFailed
-        }
-        
-        // Verify WAVE format
-        let waveMagic = audioData.subdata(in: 8..<12)
-        guard String(data: waveMagic, encoding: .ascii) == "WAVE" else {
-            throw WhisperError.preprocessingFailed
-        }
-        
-        // Find fmt chunk and data chunk
-        var offset = 12
-        var fmtChunkOffset: Int?
-        var dataChunkOffset: Int?
-        var dataChunkSize: Int?
-        
-        while offset + 8 <= audioData.count {
-            let chunkID = audioData.subdata(in: offset..<(offset + 4))
-            let chunkSize = audioData.withUnsafeBytes { bytes in
-                bytes.load(fromByteOffset: offset + 4, as: UInt32.self)
-            }
-            
-            let chunkIDString = String(data: chunkID, encoding: .ascii) ?? ""
-            
-            if chunkIDString == "fmt " {
-                fmtChunkOffset = offset + 8
-            } else if chunkIDString == "data" {
-                dataChunkOffset = offset + 8
-                dataChunkSize = Int(chunkSize)
-                break
-            }
-            
-            offset += 8 + Int(chunkSize)
-        }
-        
-        guard let fmtOffset = fmtChunkOffset,
-              let dataOffset = dataChunkOffset,
-              let dataSize = dataChunkSize else {
-            throw WhisperError.preprocessingFailed
-        }
-        
-        // Parse fmt chunk
-        let audioFormat = audioData.withUnsafeBytes { bytes in
-            bytes.load(fromByteOffset: fmtOffset, as: UInt16.self)
-        }
-        let numChannels = Int(audioData.withUnsafeBytes { bytes in
-            bytes.load(fromByteOffset: fmtOffset + 2, as: UInt16.self)
-        })
-        let sampleRateRaw = audioData.withUnsafeBytes { bytes in
-            bytes.load(fromByteOffset: fmtOffset + 4, as: UInt32.self)
-        }
-        let bitsPerSample = Int(audioData.withUnsafeBytes { bytes in
-            bytes.load(fromByteOffset: fmtOffset + 14, as: UInt16.self)
-        })
-        
-        // Extract PCM data
-        let pcmData = audioData.subdata(in: dataOffset..<(dataOffset + dataSize))
-        var samples: [Float] = []
-        
-        // Decode based on format
-        if audioFormat == 1 {  // PCM
-            if bitsPerSample == 16 {
-                samples = decodePCM16(pcmData, channels: numChannels)
-            } else if bitsPerSample == 24 {
-                samples = decodePCM24(pcmData, channels: numChannels)
-            } else if bitsPerSample == 32 {
-                samples = decodePCM32(pcmData, channels: numChannels)
-            } else {
-                throw WhisperError.preprocessingFailed
-            }
-        } else if audioFormat == 3 {  // IEEE Float
-            samples = decodeFloat32(pcmData, channels: numChannels)
-        } else {
-            throw WhisperError.preprocessingFailed
-        }
-        
-        // Resample if not 16kHz
-        if sampleRateRaw != 16000 {
-            samples = resampleTo16kHz(samples, fromRate: Float(sampleRateRaw))
-        }
-        
-        return samples
-    }
-    
-    /// Decode 16-bit PCM and downmix to mono
-    private func decodePCM16(_ data: Data, channels: Int) -> [Float] {
-        let sampleCount = data.count / 2 / channels
-        var monoSamples = [Float](repeating: 0, count: sampleCount)
-        
-        data.withUnsafeBytes { (buffer: UnsafeRawBufferPointer) in
-            let int16Buffer = buffer.bindMemory(to: Int16.self)
-            for i in 0..<sampleCount {
-                var sum: Float = 0
-                for ch in 0..<channels {
-                    sum += Float(int16Buffer[i * channels + ch]) / 32768.0
-                }
-                monoSamples[i] = sum / Float(channels)
-            }
-        }
-        
-        return monoSamples
-    }
-    
-    /// Decode 24-bit PCM and downmix to mono
-    private func decodePCM24(_ data: Data, channels: Int) -> [Float] {
-        let sampleCount = data.count / 3 / channels
-        var monoSamples = [Float](repeating: 0, count: sampleCount)
-        
-        data.withUnsafeBytes { (buffer: UnsafeRawBufferPointer) in
-            for i in 0..<sampleCount {
-                var sum: Float = 0
-                for ch in 0..<channels {
-                    let offset = (i * channels + ch) * 3
-                    let byte1 = Int32(buffer[offset])
-                    let byte2 = Int32(buffer[offset + 1])
-                    let byte3 = Int32(buffer[offset + 2])
-                    var sample24 = (byte3 << 16) | (byte2 << 8) | byte1
-                    if sample24 & 0x800000 != 0 {
-                        sample24 |= Int32(bitPattern: 0xFF000000)
-                    }
-                    sum += Float(sample24) / 8388608.0
-                }
-                monoSamples[i] = sum / Float(channels)
-            }
-        }
-        
-        return monoSamples
-    }
-    
-    /// Decode 32-bit PCM and downmix to mono
-    private func decodePCM32(_ data: Data, channels: Int) -> [Float] {
-        let sampleCount = data.count / 4 / channels
-        var monoSamples = [Float](repeating: 0, count: sampleCount)
-        
-        data.withUnsafeBytes { (buffer: UnsafeRawBufferPointer) in
-            let int32Buffer = buffer.bindMemory(to: Int32.self)
-            for i in 0..<sampleCount {
-                var sum: Float = 0
-                for ch in 0..<channels {
-                    sum += Float(int32Buffer[i * channels + ch]) / 2147483648.0
-                }
-                monoSamples[i] = sum / Float(channels)
-            }
-        }
-        
-        return monoSamples
-    }
-    
-    /// Decode 32-bit float PCM and downmix to mono
-    private func decodeFloat32(_ data: Data, channels: Int) -> [Float] {
-        let sampleCount = data.count / 4 / channels
-        var monoSamples = [Float](repeating: 0, count: sampleCount)
-        
-        data.withUnsafeBytes { (buffer: UnsafeRawBufferPointer) in
-            let floatBuffer = buffer.bindMemory(to: Float.self)
-            for i in 0..<sampleCount {
-                var sum: Float = 0
-                for ch in 0..<channels {
-                    sum += floatBuffer[i * channels + ch]
-                }
-                monoSamples[i] = sum / Float(channels)
-            }
-        }
-        
-        return monoSamples
-    }
-    
-    /// Simple linear resampling to 16kHz
-    private func resampleTo16kHz(_ samples: [Float], fromRate: Float) -> [Float] {
-        if fromRate == 16000.0 {
-            return samples
-        }
-        
-        let ratio = fromRate / 16000.0
-        let outputLength = Int(Float(samples.count) / ratio)
-        var resampled = [Float](repeating: 0, count: outputLength)
-        
-        for i in 0..<outputLength {
-            let srcPos = Float(i) * ratio
-            let srcIdx = Int(srcPos)
-            let frac = srcPos - Float(srcIdx)
-            
-            if srcIdx + 1 < samples.count {
-                resampled[i] = samples[srcIdx] * (1.0 - frac) + samples[srcIdx + 1] * frac
-            } else if srcIdx < samples.count {
-                resampled[i] = samples[srcIdx]
-            }
-        }
-        
-        return resampled
-    }
-    
-    /// Pad or trim audio samples to target length
-    private func padOrTrim(_ samples: [Float], to targetLength: Int) -> [Float] {
-        if samples.count > targetLength {
-            return Array(samples.prefix(targetLength))
-        } else if samples.count < targetLength {
-            var padded = samples
-            padded.append(contentsOf: [Float](repeating: 0.0, count: targetLength - samples.count))
-            return padded
-        }
-        return samples
-    }
+    // MARK: - Audio Preprocessing
+    // Note: Basic audio preprocessing (WAV parsing, PCM decoding, resampling)
+    // has been moved to AudioPreprocessor.swift for reuse across models
     
     /// Convert float array to MLMultiArray [1, N]
     private func convertToMLMultiArray(_ samples: [Float]) throws -> MLMultiArray {
