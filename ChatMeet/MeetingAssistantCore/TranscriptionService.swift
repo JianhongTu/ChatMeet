@@ -78,8 +78,7 @@ class TranscriptionService: @unchecked Sendable {
             // Process each chunk incrementally through Whisper
             Task { @MainActor in
                 do {
-                    let totalContextTokens = context.committedTokens.count + context.contextTokens.count
-                    print("🟢 TranscriptionService: Processing new audio chunk (total context: \(totalContextTokens) tokens)")
+                    let totalContextTokens = context.contextTokens.count
                     
                     // Track the base transcription at start of chunk
                     let baseTranscription = self.cumulativeTranscription

@@ -51,7 +51,7 @@ class SummarizationModel: @unchecked Sendable {
     
     /// Find model URL in bundle
     private func findModelURL(named: String) -> URL? {
-        // Try .mlpackage
+        // Try .mlpackage in bundle
         if let url = Bundle.main.url(forResource: named, withExtension: "mlpackage") {
             return url
         }
@@ -63,6 +63,16 @@ class SummarizationModel: @unchecked Sendable {
         if let url = Bundle.main.url(forResource: named, withExtension: nil) {
             return url
         }
+        
+        // For development: Try Models directory at project root
+        // This is relative to the bundle's parent directory structure
+        let bundleURL = Bundle.main.bundleURL.deletingLastPathComponent().deletingLastPathComponent()
+        let modelsPath = bundleURL.appendingPathComponent("Models/\(named).mlpackage")
+        if FileManager.default.fileExists(atPath: modelsPath.path) {
+            print("SummarizationModel: ✓ Found model in Models/ directory: \(modelsPath.path)")
+            return modelsPath
+        }
+        
         return nil
     }
     

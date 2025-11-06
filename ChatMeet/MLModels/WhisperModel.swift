@@ -10,10 +10,7 @@ import Foundation
 @preconcurrency import Tokenizers
 
 /// Context for streaming transcription to maintain state across chunks
-class StreamingTranscriptionContext {
-    // Decoder state (reset each chunk to match new encoder output)
-    var decoderState: MLState?
-    
+class StreamingTranscriptionContext {    
     // Token management (3-stage: committed, context, current)
     var committedTokens: [Int] = []   // All past transcription (not used in generation)
     var contextTokens: [Int] = []     // Last window's tokens (included in next generation for continuity)
@@ -27,11 +24,10 @@ class StreamingTranscriptionContext {
     var chunkCount: Int = 0
     
     // Configuration
-    let maxContextDuration: Float = 10.0  // Keep up to 10 seconds of context
+    let maxContextDuration: Float = 5.0  // Keep up to 5 seconds of context
     let sampleRate: Float = 16000.0
     
     func reset() {
-        decoderState = nil
         committedTokens = []
         contextTokens = []
         currentTokens = []
@@ -107,12 +103,12 @@ class WhisperModel: @unchecked Sendable {
     /// - Parameter named: Model name without extension
     /// - Returns: URL to compiled model if found
     private func findModelURL(named: String) -> URL? {
-        // Try to find in main bundle resources (compiled .mlmodelc)
+        // Try to find in main bundle resources (compiled .mlmodelc for release builds)
         if let url = Bundle.main.url(forResource: named, withExtension: "mlmodelc") {
             return url
         }
         
-        // Try to find .mlpackage
+        // Try to find .mlpackage in bundle
         if let url = Bundle.main.url(forResource: named, withExtension: "mlpackage") {
             return url
         }
@@ -120,6 +116,15 @@ class WhisperModel: @unchecked Sendable {
         // Try without extension (sometimes Xcode compiles differently)
         if let url = Bundle.main.url(forResource: named, withExtension: nil) {
             return url
+        }
+        
+        // For development: Try Models directory at project root
+        // This is relative to the bundle's parent directory structure
+        let bundleURL = Bundle.main.bundleURL.deletingLastPathComponent().deletingLastPathComponent()
+        let modelsPath = bundleURL.appendingPathComponent("Models/\(named).mlpackage")
+        if FileManager.default.fileExists(atPath: modelsPath.path) {
+            print("WhisperModel: ✓ Found model in Models/ directory: \(modelsPath.path)")
+            return modelsPath
         }
         
         return nil
@@ -181,9 +186,9 @@ class WhisperModel: @unchecked Sendable {
         let chunkDurationSeconds: Float = 5.0
         let chunkSampleCount = Int(chunkDurationSeconds * context.sampleRate)
         let startIndex = max(0, samples.count - chunkSampleCount)
-        var currentChunkAudio = Array(samples[startIndex..<samples.count])
+        let currentChunkAudio = Array(samples[startIndex..<samples.count])
         
-        // STAGE 2: Combine context audio (up to 10s) + current chunk (5s)
+        // STAGE 2: Combine context audio (up to 5s) + current chunk (5s)
         // This gives the encoder both recent context and new audio
         let maxContextSamples = Int(context.maxContextDuration * context.sampleRate)
         
@@ -222,10 +227,10 @@ class WhisperModel: @unchecked Sendable {
         context.committedTokens.append(contentsOf: context.contextTokens)
         
         // Current tokens become the new context (remove prompt tokens first)
-        let promptLength = 4
+        let promptLength = 4   // Whisper prompt length
         let actualGeneratedTokens = context.currentTokens.count > promptLength ? 
             Array(context.currentTokens.dropFirst(promptLength)) : []
-        context.contextTokens = actualGeneratedTokens
+        context.contextTokens = newTokens
         
         // Update context audio: combine old context + current chunk, keep last 10s
         let maxContextSamplesForUpdate = Int(context.maxContextDuration * context.sampleRate)
@@ -234,15 +239,16 @@ class WhisperModel: @unchecked Sendable {
         
         // Update statistics
         context.totalTokensGenerated += newTokens.count
-        
-        print("🔵 WhisperModel: Chunk #\(context.chunkCount) complete:")
-        print("   - Generated \(newTokens.count) new tokens")
-        print("   - Context updated: \(context.contextTokens.count) tokens, \(context.contextAudio.count) audio samples")
-        print("   - Committed: \(context.committedTokens.count) tokens, Total: \(context.totalTokensGenerated) tokens")
-        
+
         // Decode only the NEW tokens to text
         // Don't skip prompt tokens since newTokens are already filtered
         let newTranscription = decodeTokens(newTokens, using: tokenizer, skipPrompt: false)
+        
+        print("🔵 WhisperModel: Chunk #\(context.chunkCount) complete:")
+        print("   - Inputs: \(decodeTokens(context.contextTokens, using: tokenizer))")
+        print("   - New tokens generated: \(newTranscription)")
+        
+        
         
         return newTranscription
     }
@@ -577,30 +583,29 @@ class WhisperModel: @unchecked Sendable {
         var newTokens: [Int] = []
         
         // Create fresh decoder state for this chunk (matches new encoder output)
-        context.decoderState = decoder.makeState()
+        let decoderState = decoder.makeState()
         let promptTokens: [Int] = [startTokenId, 50259, 50359, 50363]
         
         // STAGE 3: Initialize with prompt + context tokens for continuity
         // Context tokens provide transcription history for better coherence
         var initialTokens = promptTokens + context.contextTokens
         context.currentTokens = initialTokens
+
+        print("🔵 WhisperModel: Prefill prompt: \(decodeTokens(initialTokens, using: tokenizer))")
+
+        // // Prefill with prompt + context tokens
+        // let prefillInput = try prepareDecoderInput(
+        //     tokens: initialTokens,
+        //     encoderOutput: encoderOutput,
+        //     isPrefill: true
+        // )
+        // _ = try await decoder.prediction(from: prefillInput, using: decoderState)
         
-        print("🔵 WhisperModel: Initializing decoder with \(promptTokens.count) prompt + \(context.contextTokens.count) context tokens")
-        
-        // Prefill with prompt + context tokens
-        let prefillInput = try prepareDecoderInput(
-            tokens: initialTokens,
-            encoderOutput: encoderOutput,
-            isPrefill: true
-        )
-        _ = try await decoder.prediction(from: prefillInput, using: context.decoderState!)
-        
-        print("🔵 WhisperModel: Prefill complete (committed: \(context.committedTokens.count), context: \(context.contextTokens.count), ready to generate new)")
-        
+                
         // Generate tokens for this chunk only (fresh state each time)
         let tokensToGenerate = 50  // Generate ~50 tokens per chunk (roughly 5 seconds of speech)
         print("🔵 WhisperModel: Starting decode for new chunk - will generate up to \(tokensToGenerate) tokens")
-        
+        var firstToken = true
         for iteration in 0..<tokensToGenerate {
             // Check if we've hit max tokens
             if context.currentTokens.count >= maxTokens {
@@ -612,13 +617,14 @@ class WhisperModel: @unchecked Sendable {
             let decoderInput = try prepareDecoderInput(
                 tokens: context.currentTokens,
                 encoderOutput: encoderOutput,
-                isPrefill: false  // Extension mode with KV cache
+                isPrefill: firstToken // Extension mode with KV cache
             )
+            firstToken = false
             
             // Run decoder with existing state (reuses KV cache)
             let output: MLFeatureProvider
             do {
-                output = try await decoder.prediction(from: decoderInput, using: context.decoderState!)
+                output = try await decoder.prediction(from: decoderInput, using: decoderState)
             } catch {
                 print("❌ WhisperModel: Decoder prediction failed at token \(context.currentTokens.count): \(error)")
                 throw WhisperError.inferenceFailed("Decoder failed at \(context.currentTokens.count) tokens: \(error.localizedDescription)")
@@ -648,14 +654,9 @@ class WhisperModel: @unchecked Sendable {
             context.currentTokens.append(nextToken)
             newTokens.append(nextToken)
             
-            // Log progress every 10 tokens
-            if newTokens.count % 10 == 0 {
-                print("🔵 WhisperModel: Generated \(newTokens.count) new tokens this chunk")
-            }
-            
             // Stream if callback provided (show cumulative transcription)
             if let onProgress = onProgress {
-                let cumulativeTranscription = decodeTokens(context.currentTokens, using: tokenizer)
+                let cumulativeTranscription = decodeTokens(newTokens, using: tokenizer, skipPrompt: false)
                 onProgress(cumulativeTranscription)
             }
         }
