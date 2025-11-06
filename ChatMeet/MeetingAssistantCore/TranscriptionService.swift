@@ -2,22 +2,63 @@
 //  TranscriptionService.swift
 //  MeetingAssistantCore
 //
-//  Service for transcribing audio to text using Whisper
+//  Service for transcribing audio to text using Whisper or Parakeet models
 //
 
 import Foundation
 
-/// Service that handles audio transcription using the Whisper model
+/// Service that handles audio transcription using the Whisper or Parakeet model
 class TranscriptionService: @unchecked Sendable {
     
-    private let whisperModel: WhisperModel
+    private var whisperModel: WhisperModel?
+    private var parakeetModel: ParakeetModel?
+    private var currentModel: TranscriptionModel?
+    
     private var streamingProcessor: StreamingAudioProcessor?
     private var streamingContext: StreamingTranscriptionContext?
     private var isStreaming = false
     private var cumulativeTranscription = ""
     
+    // Model readiness states
+    private(set) var isTranscriptionModelReady = false
+    
     public init() {
-        self.whisperModel = WhisperModel()
+        // Models will be loaded lazily when user selects one
+    }
+    
+    /// Switch to a different transcription model
+    /// - Parameter model: The model to switch to
+    public func switchModel(to model: TranscriptionModel) async throws {
+        print("TranscriptionService: 🔄 Switching to \(model.displayName)...")
+        
+        // Unload current model if any
+        whisperModel?.unloadModel()
+        parakeetModel?.unloadModel()
+        whisperModel = nil
+        parakeetModel = nil
+        isTranscriptionModelReady = false
+        
+        // Load the new model
+        switch model {
+        case .none:
+            // No model selected - just keep everything unloaded
+            print("TranscriptionService: ⚠️ No model selected")
+            
+        case .whisperTiny:
+            let newWhisper = WhisperModel()
+            try await newWhisper.loadModel()
+            whisperModel = newWhisper
+            isTranscriptionModelReady = newWhisper.isReady
+            
+        case .parakeetV3:
+            let newParakeet = ParakeetModel()
+            try await newParakeet.loadModel()
+            parakeetModel = newParakeet
+            isTranscriptionModelReady = newParakeet.isReady
+        }
+        
+        currentModel = model
+        print("TranscriptionService: ✅ Switched to \(model.displayName)")
     }
     
     /// Transcribe audio data to text
@@ -36,9 +77,22 @@ class TranscriptionService: @unchecked Sendable {
             throw TranscriptionError.audioTooShort
         }
         
-        // Process through Whisper model with streaming
+        // Check that a model is loaded
+        guard isTranscriptionModelReady else {
+            throw TranscriptionError.modelNotLoaded
+        }
+        
+        // Process through the selected model with streaming
         do {
-            let transcription = try await whisperModel.transcribe(audioData, onProgress: onProgress)
+            let transcription: String
+            
+            if let whisper = whisperModel {
+                transcription = try await whisper.transcribe(audioData, onProgress: onProgress)
+            } else if let parakeet = parakeetModel {
+                transcription = try await parakeet.transcribe(audioData, onProgress: onProgress)
+            } else {
+                throw TranscriptionError.modelNotLoaded
+            }
             
             // Validate we got some output
             guard !transcription.isEmpty else {
@@ -49,6 +103,9 @@ class TranscriptionService: @unchecked Sendable {
             
         } catch let error as WhisperError {
             // Convert Whisper errors to TranscriptionError
+            throw TranscriptionError.transcriptionFailed(error.localizedDescription)
+        } catch let error as ParakeetError {
+            // Convert Parakeet errors to TranscriptionError
             throw TranscriptionError.transcriptionFailed(error.localizedDescription)
         } catch {
             throw TranscriptionError.transcriptionFailed(error.localizedDescription)
@@ -63,6 +120,15 @@ class TranscriptionService: @unchecked Sendable {
             throw TranscriptionError.alreadyStreaming
         }
         
+        guard isTranscriptionModelReady else {
+            throw TranscriptionError.modelNotLoaded
+        }
+        
+        // Only Whisper supports streaming for now
+        guard whisperModel != nil else {
+            throw TranscriptionError.streamingNotSupported
+        }
+        
         isStreaming = true
         cumulativeTranscription = ""
         
@@ -73,7 +139,7 @@ class TranscriptionService: @unchecked Sendable {
         
         // Start streaming with 5-second chunk processing
         try streamingProcessor?.startStreaming { [weak self] audioChunk in
-            guard let self = self, let context = self.streamingContext else { return }
+            guard let self = self, let context = self.streamingContext, let whisper = self.whisperModel else { return }
             
             // Process each chunk incrementally through Whisper
             Task { @MainActor in
@@ -85,7 +151,7 @@ class TranscriptionService: @unchecked Sendable {
                     let needsSpace = !baseTranscription.isEmpty
                     
                     // Get only NEW text from this chunk with token-by-token streaming
-                    let newText = try await self.whisperModel.transcribeIncremental(
+                    let newText = try await whisper.transcribeIncremental(
                         audioData: audioChunk,
                         context: context,
                         onProgress: { partialText in
@@ -146,6 +212,7 @@ public enum TranscriptionError: LocalizedError {
     case modelNotLoaded
     case transcriptionFailed(String)
     case alreadyStreaming
+    case streamingNotSupported
     
     public var errorDescription: String? {
         switch self {
@@ -156,11 +223,13 @@ public enum TranscriptionError: LocalizedError {
         case .noSpeechDetected:
             return "No speech detected in the audio"
         case .modelNotLoaded:
-            return "Whisper model is not loaded"
+            return "Transcription model is not loaded"
         case .transcriptionFailed(let reason):
             return "Transcription failed: \(reason)"
         case .alreadyStreaming:
             return "Streaming transcription is already active"
+        case .streamingNotSupported:
+            return "Current model does not support streaming"
         }
     }
 }

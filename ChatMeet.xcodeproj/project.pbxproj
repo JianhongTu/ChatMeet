@@ -7,6 +7,14 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		F443251E2EBD62E800B89542 /* StatefulLlama3.2Instruct.mlpackage in Sources */ = {isa = PBXBuildFile; fileRef = F443251A2EBD62E800B89542 /* StatefulLlama3.2Instruct.mlpackage */; };
+		F443251F2EBD62E800B89542 /* WhisperEncoder_whisper-tiny.mlpackage in Sources */ = {isa = PBXBuildFile; fileRef = F443251C2EBD62E800B89542 /* WhisperEncoder_whisper-tiny.mlpackage */; };
+		F44325202EBD62E800B89542 /* ParakeetPreprocessor.mlpackage in Sources */ = {isa = PBXBuildFile; fileRef = F44325182EBD62E800B89542 /* ParakeetPreprocessor.mlpackage */; };
+		F44325212EBD62E800B89542 /* WhisperDecoder_whisper-tiny.mlpackage in Sources */ = {isa = PBXBuildFile; fileRef = F443251B2EBD62E800B89542 /* WhisperDecoder_whisper-tiny.mlpackage */; };
+		F44325222EBD62E800B89542 /* ParakeetDecoderInt4.mlpackage in Sources */ = {isa = PBXBuildFile; fileRef = F44325162EBD62E800B89542 /* ParakeetDecoderInt4.mlpackage */; };
+		F44325232EBD62E800B89542 /* ParakeetJoinerInt4.mlpackage in Sources */ = {isa = PBXBuildFile; fileRef = F44325172EBD62E800B89542 /* ParakeetJoinerInt4.mlpackage */; };
+		F44325242EBD62E800B89542 /* README.md in Resources */ = {isa = PBXBuildFile; fileRef = F44325192EBD62E800B89542 /* README.md */; };
+		F44325262EBD62FE00B89542 /* ParakeetEncoderInt4.mlpackage in Sources */ = {isa = PBXBuildFile; fileRef = F44325252EBD62FE00B89542 /* ParakeetEncoderInt4.mlpackage */; };
 		F44B061B2EAB53E2009EBECA /* Hub in Frameworks */ = {isa = PBXBuildFile; productRef = F44B061A2EAB53E2009EBECA /* Hub */; };
 		F44B061D2EAB53E2009EBECA /* Tokenizers in Frameworks */ = {isa = PBXBuildFile; productRef = F44B061C2EAB53E2009EBECA /* Tokenizers */; };
 		F44B061F2EAB53E2009EBECA /* Transformers in Frameworks */ = {isa = PBXBuildFile; productRef = F44B061E2EAB53E2009EBECA /* Transformers */; };
@@ -14,6 +22,14 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		F44325162EBD62E800B89542 /* ParakeetDecoderInt4.mlpackage */ = {isa = PBXFileReference; lastKnownFileType = folder.mlpackage; path = ParakeetDecoderInt4.mlpackage; sourceTree = "<group>"; };
+		F44325172EBD62E800B89542 /* ParakeetJoinerInt4.mlpackage */ = {isa = PBXFileReference; lastKnownFileType = folder.mlpackage; path = ParakeetJoinerInt4.mlpackage; sourceTree = "<group>"; };
+		F44325182EBD62E800B89542 /* ParakeetPreprocessor.mlpackage */ = {isa = PBXFileReference; lastKnownFileType = folder.mlpackage; path = ParakeetPreprocessor.mlpackage; sourceTree = "<group>"; };
+		F44325192EBD62E800B89542 /* README.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = README.md; sourceTree = "<group>"; };
+		F443251A2EBD62E800B89542 /* StatefulLlama3.2Instruct.mlpackage */ = {isa = PBXFileReference; lastKnownFileType = folder.mlpackage; path = StatefulLlama3.2Instruct.mlpackage; sourceTree = "<group>"; };
+		F443251B2EBD62E800B89542 /* WhisperDecoder_whisper-tiny.mlpackage */ = {isa = PBXFileReference; lastKnownFileType = folder.mlpackage; path = "WhisperDecoder_whisper-tiny.mlpackage"; sourceTree = "<group>"; };
+		F443251C2EBD62E800B89542 /* WhisperEncoder_whisper-tiny.mlpackage */ = {isa = PBXFileReference; lastKnownFileType = folder.mlpackage; path = "WhisperEncoder_whisper-tiny.mlpackage"; sourceTree = "<group>"; };
+		F44325252EBD62FE00B89542 /* ParakeetEncoderInt4.mlpackage */ = {isa = PBXFileReference; lastKnownFileType = folder.mlpackage; path = ParakeetEncoderInt4.mlpackage; sourceTree = "<group>"; };
 		F44B05DA2EAB51FE009EBECA /* ChatMeet.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = ChatMeet.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
@@ -40,9 +56,25 @@
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
+		F443251D2EBD62E800B89542 /* Models */ = {
+			isa = PBXGroup;
+			children = (
+				F44325162EBD62E800B89542 /* ParakeetDecoderInt4.mlpackage */,
+				F44325172EBD62E800B89542 /* ParakeetJoinerInt4.mlpackage */,
+				F44325182EBD62E800B89542 /* ParakeetPreprocessor.mlpackage */,
+				F44325192EBD62E800B89542 /* README.md */,
+				F443251A2EBD62E800B89542 /* StatefulLlama3.2Instruct.mlpackage */,
+				F443251B2EBD62E800B89542 /* WhisperDecoder_whisper-tiny.mlpackage */,
+				F443251C2EBD62E800B89542 /* WhisperEncoder_whisper-tiny.mlpackage */,
+				F44325252EBD62FE00B89542 /* ParakeetEncoderInt4.mlpackage */,
+			);
+			path = Models;
+			sourceTree = "<group>";
+		};
 		F44B05D12EAB51FE009EBECA = {
 			isa = PBXGroup;
 			children = (
+				F443251D2EBD62E800B89542 /* Models */,
 				F44B05DC2EAB51FE009EBECA /* ChatMeet */,
 				F44B05DB2EAB51FE009EBECA /* Products */,
 			);
@@ -128,6 +160,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				F44325242EBD62E800B89542 /* README.md in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -138,6 +171,13 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				F443251E2EBD62E800B89542 /* StatefulLlama3.2Instruct.mlpackage in Sources */,
+				F443251F2EBD62E800B89542 /* WhisperEncoder_whisper-tiny.mlpackage in Sources */,
+				F44325202EBD62E800B89542 /* ParakeetPreprocessor.mlpackage in Sources */,
+				F44325212EBD62E800B89542 /* WhisperDecoder_whisper-tiny.mlpackage in Sources */,
+				F44325222EBD62E800B89542 /* ParakeetDecoderInt4.mlpackage in Sources */,
+				F44325232EBD62E800B89542 /* ParakeetJoinerInt4.mlpackage in Sources */,
+				F44325262EBD62FE00B89542 /* ParakeetEncoderInt4.mlpackage in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

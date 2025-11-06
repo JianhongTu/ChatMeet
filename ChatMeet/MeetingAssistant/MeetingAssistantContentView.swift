@@ -32,6 +32,14 @@ struct MeetingAssistantContentView: View {
                     .font(.system(size: 28, weight: .semibold))
                     .foregroundColor(.primary)
                 
+                // Model selection and status indicators
+                HStack(spacing: 20) {
+                    modelPicker
+                    Spacer()
+                    modelStatusIndicators
+                }
+                .padding(.horizontal, 20)
+                
                 streamingModeToggle
                 
                 HStack(spacing: 12) {
@@ -76,6 +84,13 @@ struct MeetingAssistantContentView: View {
                     .font(.system(size: 24, weight: .semibold))
                     .foregroundColor(.primary)
                 
+                // Model selection and status
+                VStack(spacing: 8) {
+                    modelPicker
+                    modelStatusIndicators
+                }
+                .padding(.horizontal, 20)
+                
                 // Streaming mode toggle
                 streamingModeToggle
                     .padding(.horizontal, 20)
@@ -116,6 +131,58 @@ struct MeetingAssistantContentView: View {
     
     // MARK: - Reusable Components
     
+    private var modelPicker: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "brain")
+                .font(.system(size: 16))
+                .foregroundColor(.accentColor)
+            
+            Picker("Transcription Model", selection: $viewModel.selectedModel) {
+                ForEach(TranscriptionModel.allCases) { model in
+                    Text(model.displayName).tag(model)
+                }
+            }
+            .frame(width: 200)
+            .disabled(viewModel.isRecording || viewModel.isPlaying || viewModel.isLoadingModel)
+            .onChange(of: viewModel.selectedModel) { newModel in
+                Task {
+                    await viewModel.switchModel(to: newModel)
+                }
+            }
+            
+            if viewModel.isLoadingModel {
+                ProgressView()
+                    .scaleEffect(0.7)
+            }
+            
+            Text(viewModel.selectedModel.description)
+                .font(.system(size: 11))
+                .foregroundColor(.secondary)
+        }
+    }
+    
+    private var modelStatusIndicators: some View {
+        HStack(spacing: 16) {
+            HStack(spacing: 6) {
+                Circle()
+                    .fill(viewModel.isTranscriptionModelReady ? Color.green : Color.gray)
+                    .frame(width: 10, height: 10)
+                Text("Transcription")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+            
+            HStack(spacing: 6) {
+                Circle()
+                    .fill(viewModel.isSummarizationModelReady ? Color.green : Color.gray)
+                    .frame(width: 10, height: 10)
+                Text("Summarization")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+        }
+    }
+    
     private var streamingModeToggle: some View {
         Toggle(isOn: $viewModel.isStreamingMode) {
             HStack(spacing: 6) {
@@ -152,7 +219,8 @@ struct MeetingAssistantContentView: View {
             .cornerRadius(8)
         }
         .buttonStyle(.plain)
-        .disabled(viewModel.isPlaying)
+        .disabled(viewModel.isPlaying || !viewModel.isTranscriptionModelReady)
+        .opacity((viewModel.isTranscriptionModelReady && !viewModel.isPlaying) ? 1.0 : 0.5)
     }
     
     private var playbackButton: some View {

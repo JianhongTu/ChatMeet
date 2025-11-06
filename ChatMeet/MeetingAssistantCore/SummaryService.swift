@@ -14,6 +14,11 @@ class SummaryService: @unchecked Sendable {
     private var bulletPoints: [SummaryBulletPoint] = []
     private var nextID: Int = 1
     
+    /// Check if summarization model is ready
+    public var isReady: Bool {
+        return summarizationModel.isModelLoaded
+    }
+    
     public init() {
         self.summarizationModel = SummarizationModel()
     }

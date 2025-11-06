@@ -54,48 +54,63 @@ class WhisperModel: @unchecked Sendable {
     private let audioLength = 30  // 30 seconds
     private let expectedSamples = 480000  // 16kHz * 30s
     
+    // Model readiness state
+    private(set) var isReady: Bool = false
+    
     public init() {
-        // Initialize the Whisper encoder/decoder models and tokenizer
-        loadModels()
+        // Models will be loaded lazily via loadModel()
     }
     
     /// Load the Core ML Whisper encoder and decoder models
-    private func loadModels() {
+    /// This should be called after user selects the Whisper model
+    public func loadModel() async throws {
+        print("WhisperModel: 🔄 Starting model loading...")
+        
+        try await loadModels()
+        try await loadTokenizer()
+        
+        isReady = true
+        print("WhisperModel: ✅ Models loaded successfully")
+    }
+    
+    /// Unload all models to free memory
+    public func unloadModel() {
+        encoderModel = nil
+        decoderModel = nil
+        tokenizer = nil
+        isReady = false
+        print("WhisperModel: 🗑️ Models unloaded")
+    }
+    
+    /// Load the Core ML Whisper encoder and decoder models
+    private func loadModels() async throws {
         // Configure Core ML to use CPU and GPU
         let config = MLModelConfiguration()
         config.computeUnits = .cpuAndGPU
         
         // Load encoder model
-        // Note: Models should be placed in MLModels/ directory
-        do {
-            if let encoderURL = findModelURL(named: encoderModelName) {
-                encoderModel = try MLModel(contentsOf: encoderURL, configuration: config)
-            } else {
-                print("WhisperModel: ✗ Encoder model not found (\(encoderModelName))")
-            }
-        } catch {
-            print("WhisperModel: ✗ Failed to load encoder model: \(error.localizedDescription)")
+        guard let encoderURL = findModelURL(named: encoderModelName) else {
+            throw WhisperError.modelNotFound(encoderModelName)
         }
+        encoderModel = try MLModel(contentsOf: encoderURL, configuration: config)
+        print("WhisperModel: ✓ Loaded encoder model")
         
         // Load decoder model
-        do {
-            if let decoderURL = findModelURL(named: decoderModelName) {
-                decoderModel = try MLModel(contentsOf: decoderURL, configuration: config)
-            } else {
-                print("WhisperModel: ✗ Decoder model not found (\(decoderModelName))")
-            }
-        } catch {
-            print("WhisperModel: ✗ Failed to load decoder model: \(error.localizedDescription)")
+        guard let decoderURL = findModelURL(named: decoderModelName) else {
+            throw WhisperError.modelNotFound(decoderModelName)
         }
-        
-        // Load tokenizer from Hugging Face
-        Task { [weak self] in
-            guard let self = self else { return }
-            do {
-                self.tokenizer = try await AutoTokenizer.from(pretrained: self.modelName)
-            } catch {
-                print("WhisperModel: ✗ Failed to load tokenizer: \(error.localizedDescription)")
-            }
+        decoderModel = try MLModel(contentsOf: decoderURL, configuration: config)
+        print("WhisperModel: ✓ Loaded decoder model")
+    }
+    
+    /// Load tokenizer from Hugging Face
+    private func loadTokenizer() async throws {
+        do {
+            tokenizer = try await AutoTokenizer.from(pretrained: modelName)
+            print("WhisperModel: ✓ Loaded tokenizer from \(modelName)")
+        } catch {
+            print("WhisperModel: ✗ Failed to load tokenizer: \(error.localizedDescription)")
+            throw WhisperError.tokenizerLoadFailed(error.localizedDescription)
         }
     }
     
@@ -568,6 +583,8 @@ class WhisperModel: @unchecked Sendable {
 /// Errors that can occur during Whisper operations
 public enum WhisperError: LocalizedError {
     case modelNotLoaded
+    case modelNotFound(String)
+    case tokenizerLoadFailed(String)
     case preprocessingFailed
     case inferenceFailed(String)
     
@@ -575,6 +592,10 @@ public enum WhisperError: LocalizedError {
         switch self {
         case .modelNotLoaded:
             return "Whisper model is not loaded"
+        case .modelNotFound(let name):
+            return "Model not found: \(name)"
+        case .tokenizerLoadFailed(let reason):
+            return "Failed to load tokenizer: \(reason)"
         case .preprocessingFailed:
             return "Failed to preprocess audio"
         case .inferenceFailed(let reason):

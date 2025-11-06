@@ -20,6 +20,11 @@ class SummarizationModel: @unchecked Sendable {
     private let modelName = "meta-llama/Llama-3.2-1B-Instruct"
     private let compiledModelName = "StatefulLlama3.2Instruct"
     
+    /// Check if model is loaded and ready
+    public var isModelLoaded: Bool {
+        return model != nil
+    }
+    
     public init() {
         // Initialize the summarization model
         loadModel()

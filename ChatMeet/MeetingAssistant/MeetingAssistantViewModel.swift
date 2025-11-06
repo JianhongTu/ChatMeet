@@ -12,13 +12,19 @@ import Combine
 class MeetingAssistantViewModel: ObservableObject {
     @Published public var isRecording: Bool = false
     @Published public var isPlaying: Bool = false
-    @Published public var statusMessage: String = "Click 'Start Recording' to begin"
+    @Published public var statusMessage: String = "Select a transcription model to begin"
     @Published public var transcription: String = "Transcribed text will appear here..."
     @Published public var summaryBulletPoints: [SummaryBulletPoint] = []
     @Published public var summaryActionLog: String = ""  // Shows LLM decision-making
     @Published public var recordingDuration: TimeInterval = 0
     @Published public var isSummarizing: Bool = false
     @Published public var isStreamingMode: Bool = false  // Toggle for streaming vs batch mode
+    
+    // Model selection
+    @Published public var selectedModel: TranscriptionModel = .none
+    @Published public var isTranscriptionModelReady: Bool = false
+    @Published public var isSummarizationModelReady: Bool = false
+    @Published public var isLoadingModel: Bool = false
     
     // Performance statistics
     @Published public var transcriptionTime: TimeInterval = 0
@@ -40,7 +46,54 @@ class MeetingAssistantViewModel: ObservableObject {
     private var streamingBuffer: String = ""  // Accumulates streaming transcriptions
     private var streamingStartTime: Date?  // Track streaming recording start time
     
-    public init() {}
+    public init() {
+        // Check model readiness periodically since they load asynchronously
+        Task { @MainActor in
+            // Wait a bit for models to start loading
+            try? await Task.sleep(nanoseconds: 1_000_000_000) // 1 second
+            
+            // Poll for summarization model readiness
+            for _ in 0..<10 {
+                if self.summaryService.isReady {
+                    self.isSummarizationModelReady = true
+                    break
+                }
+                try? await Task.sleep(nanoseconds: 500_000_000) // 0.5 seconds
+            }
+        }
+    }
+    
+    /// Switch to a different transcription model
+    /// - Parameter model: The model to switch to
+    public func switchModel(to model: TranscriptionModel) async {
+        // Don't do anything if "none" is selected
+        guard model != .none else {
+            statusMessage = "Select a transcription model to begin"
+            isTranscriptionModelReady = false
+            return
+        }
+        
+        guard !isRecording && !isLoadingModel else {
+            statusMessage = "Cannot switch model while recording or loading"
+            return
+        }
+        
+        isLoadingModel = true
+        isTranscriptionModelReady = false
+        statusMessage = "Loading \(model.displayName)..."
+        
+        do {
+            try await transcriptionService.switchModel(to: model)
+            selectedModel = model
+            isTranscriptionModelReady = transcriptionService.isTranscriptionModelReady
+            statusMessage = "\(model.displayName) ready! Click 'Start Recording' to begin"
+        } catch {
+            statusMessage = "Failed to load model: \(error.localizedDescription)"
+            isTranscriptionModelReady = false
+        }
+        
+        isLoadingModel = false
+    }
     
     /// Toggle audio recording on/off
     public func toggleRecording() {
