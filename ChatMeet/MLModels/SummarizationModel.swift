@@ -25,8 +25,16 @@ class SummarizationModel: @unchecked Sendable {
         return model != nil
     }
     
-    public init() {
-        // Initialize the summarization model
+    public init(autoLoad: Bool = true) {
+        // Only auto-load if requested
+        if autoLoad {
+            loadModel()
+        }
+    }
+    
+    /// Manually trigger model loading
+    public func ensureModelLoaded() {
+        guard model == nil else { return }
         loadModel()
     }
     

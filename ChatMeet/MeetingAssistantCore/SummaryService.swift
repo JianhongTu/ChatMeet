@@ -7,20 +7,85 @@
 
 import Foundation
 
+/// Summarization provider type
+public enum SummarizationProvider {
+    case local  // On-device Core ML model
+    case online // Online API (OpenAI, etc.)
+}
+
 /// Service that handles text summarization using a language model
 class SummaryService: @unchecked Sendable {
     
     private let summarizationModel: SummarizationModel
+    private var onlineProvider: OnlineSummarizationProvider?
+    private var currentProvider: SummarizationProvider
+    
     private var bulletPoints: [SummaryBulletPoint] = []
     private var nextID: Int = 1
     
     /// Check if summarization model is ready
     public var isReady: Bool {
-        return summarizationModel.isModelLoaded
+        switch currentProvider {
+        case .local:
+            return summarizationModel.isModelLoaded
+        case .online:
+            return onlineProvider != nil
+        }
     }
     
-    public init() {
-        self.summarizationModel = SummarizationModel()
+    public init(provider: SummarizationProvider = .local) {
+        // Initialize model without auto-loading
+        self.summarizationModel = SummarizationModel(autoLoad: false)
+        self.currentProvider = provider
+        
+        // Initialize online provider if needed
+        if provider == .online {
+            self.configureOnlineProvider()
+        } else {
+            // Only load local model if starting with local provider
+            self.summarizationModel.ensureModelLoaded()
+        }
+    }
+    
+    /// Switch to online API provider
+    /// - Parameters:
+    ///   - apiKey: API key for authentication
+    ///   - endpoint: Optional custom endpoint (defaults to Nautilus)
+    ///   - model: Optional model name (defaults to gemma3)
+    public func switchToOnlineProvider(apiKey: String, endpoint: String? = nil, model: String? = nil) {
+        let finalEndpoint = endpoint ?? "https://ellm.nrp-nautilus.io/v1/chat/completions"
+        let finalModel = model ?? "gemma3"
+        
+        self.onlineProvider = OnlineSummarizationProvider(
+            apiKey: apiKey,
+            apiEndpoint: finalEndpoint,
+            model: finalModel
+        )
+        self.currentProvider = .online
+        print("✅ SummaryService: Switched to online provider (\(finalModel))")
+    }
+    
+    /// Switch to local on-device model
+    public func switchToLocalProvider() {
+        self.currentProvider = .local
+        // Ensure model is loaded when switching to local
+        self.summarizationModel.ensureModelLoaded()
+        print("✅ SummaryService: Switched to local on-device model")
+    }
+    
+    /// Configure online provider from stored API key (if available)
+    private func configureOnlineProvider() {
+        if let apiKey = APIKeyManager.shared.getAPIKey() {
+            let endpoint = APIKeyManager.shared.getAPIEndpoint() ?? "https://ellm.nrp-nautilus.io/v1/chat/completions"
+            let model = APIKeyManager.shared.getModelName() ?? "gemma3"
+            
+            self.onlineProvider = OnlineSummarizationProvider(
+                apiKey: apiKey,
+                apiEndpoint: endpoint,
+                model: model
+            )
+            print("✅ SummaryService: Configured online provider from stored credentials")
+        }
     }
     
     /// Agentic workflow: Update summary based on new transcript
@@ -34,12 +99,26 @@ class SummaryService: @unchecked Sendable {
             throw SummaryError.emptyText
         }
         
-        // Ask LLM to decide what actions to take
-        let actions = try await summarizationModel.analyzeAndDecide(
-            newText: newText,
-            currentBulletPoints: bulletPoints,
-            onProgress: onProgress
-        )
+        // Ask LLM to decide what actions to take (using configured provider)
+        let actions: [SummaryAction]
+        
+        switch currentProvider {
+        case .local:
+            actions = try await summarizationModel.analyzeAndDecide(
+                newText: newText,
+                currentBulletPoints: bulletPoints,
+                onProgress: onProgress
+            )
+        case .online:
+            guard let provider = onlineProvider else {
+                throw SummaryError.providerNotConfigured
+            }
+            actions = try await provider.analyzeAndDecide(
+                newText: newText,
+                currentBulletPoints: bulletPoints,
+                onProgress: onProgress
+            )
+        }
         
         // Apply actions to bullet points
         for action in actions {
@@ -102,8 +181,18 @@ class SummaryService: @unchecked Sendable {
             throw SummaryError.emptyText
         }
         
-        // Process through summarization model with streaming
-        let summary = try await summarizationModel.summarize(text, onProgress: onProgress)
+        // Process through selected provider
+        let summary: String
+        
+        switch currentProvider {
+        case .local:
+            summary = try await summarizationModel.summarize(text, onProgress: onProgress)
+        case .online:
+            guard let provider = onlineProvider else {
+                throw SummaryError.providerNotConfigured
+            }
+            summary = try await provider.summarize(text, onProgress: onProgress)
+        }
         
         return summary
     }
@@ -113,6 +202,7 @@ class SummaryService: @unchecked Sendable {
 public enum SummaryError: LocalizedError {
     case emptyText
     case modelNotLoaded
+    case providerNotConfigured
     case summarizationFailed(String)
     
     public var errorDescription: String? {
@@ -121,6 +211,8 @@ public enum SummaryError: LocalizedError {
             return "No text to summarize"
         case .modelNotLoaded:
             return "Summarization model is not loaded"
+        case .providerNotConfigured:
+            return "Online summarization provider is not configured"
         case .summarizationFailed(let reason):
             return "Summarization failed: \(reason)"
         }

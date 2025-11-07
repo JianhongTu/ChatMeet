@@ -11,6 +11,7 @@ import UniformTypeIdentifiers
 struct MeetingAssistantContentView: View {
     @StateObject private var viewModel = MeetingAssistantViewModel()
     @State private var isFilePickerPresented = false
+    @State private var isAPISettingsPresented = false
     
     init() {}
     
@@ -42,10 +43,13 @@ struct MeetingAssistantContentView: View {
                 
                 streamingModeToggle
                 
+                summarizationProviderToggle
+                
                 HStack(spacing: 12) {
                     recordButton
                     playbackButton
                     uploadButton
+                    apiSettingsButton
                 }
                 
                 statusMessage
@@ -96,11 +100,17 @@ struct MeetingAssistantContentView: View {
                     .padding(.horizontal, 20)
                     .padding(.bottom, 8)
                 
+                // Summarization provider toggle
+                summarizationProviderToggle
+                    .padding(.horizontal, 20)
+                    .padding(.bottom, 8)
+                
                 // Buttons stacked vertically
                 VStack(spacing: 10) {
                     recordButton
                     playbackButton
                     uploadButton
+                    apiSettingsButton
                 }
                 .padding(.horizontal, 20)
                 
@@ -144,9 +154,9 @@ struct MeetingAssistantContentView: View {
             }
             .frame(width: 200)
             .disabled(viewModel.isRecording || viewModel.isPlaying || viewModel.isLoadingModel)
-            .onChange(of: viewModel.selectedModel) { newModel in
+            .onChange(of: viewModel.selectedModel) {
                 Task {
-                    await viewModel.switchModel(to: newModel)
+                    await viewModel.switchModel(to: viewModel.selectedModel)
                 }
             }
             
@@ -196,6 +206,50 @@ struct MeetingAssistantContentView: View {
         #if os(macOS)
         .toggleStyle(.switch)
         #endif
+    }
+    
+    private var summarizationProviderToggle: some View {
+        Toggle(isOn: $viewModel.useOnlineSummarization) {
+            HStack(spacing: 6) {
+                Image(systemName: viewModel.useOnlineSummarization ? "cloud.fill" : "cpu")
+                    .font(.system(size: 14))
+                Text(viewModel.useOnlineSummarization ? "Online API Summarization" : "On-Device Summarization")
+                    .font(.system(size: 13))
+            }
+        }
+        .disabled(viewModel.isRecording || viewModel.isPlaying || !APIKeyManager.shared.hasAPIKey())
+        .onChange(of: viewModel.useOnlineSummarization) {
+            viewModel.toggleSummarizationProvider()
+        }
+        #if os(macOS)
+        .toggleStyle(.switch)
+        #endif
+    }
+    
+    private var apiSettingsButton: some View {
+        Button(action: {
+            isAPISettingsPresented = true
+        }) {
+            HStack(spacing: 8) {
+                Image(systemName: "key.fill")
+                    .font(.system(size: 16))
+                Text("API Settings")
+                    .font(.system(size: 14, weight: .medium))
+            }
+            #if os(macOS)
+            .frame(width: 140, height: 44)
+            #else
+            .frame(maxWidth: .infinity)
+            .frame(height: 50)
+            #endif
+            .background(Color.gray.opacity(0.2))
+            .foregroundColor(.primary)
+            .cornerRadius(8)
+        }
+        .buttonStyle(.plain)
+        .sheet(isPresented: $isAPISettingsPresented) {
+            APISettingsView()
+        }
     }
     
     private var recordButton: some View {

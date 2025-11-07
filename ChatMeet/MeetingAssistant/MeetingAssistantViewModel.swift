@@ -19,6 +19,7 @@ class MeetingAssistantViewModel: ObservableObject {
     @Published public var recordingDuration: TimeInterval = 0
     @Published public var isSummarizing: Bool = false
     @Published public var isStreamingMode: Bool = false  // Toggle for streaming vs batch mode
+    @Published public var useOnlineSummarization: Bool = false  // Toggle for online API
     
     // Model selection
     @Published public var selectedModel: TranscriptionModel = .none
@@ -35,7 +36,11 @@ class MeetingAssistantViewModel: ObservableObject {
     
     private let audioRecorder = AudioRecorder()
     private let transcriptionService = TranscriptionService()
-    private let summaryService = SummaryService()
+    private lazy var summaryService: SummaryService = {
+        // Start with online provider if API key is configured, otherwise local
+        let provider: SummarizationProvider = APIKeyManager.shared.hasAPIKey() ? .online : .local
+        return SummaryService(provider: provider)
+    }()
     private var recordingTimer: Timer?
     private var playbackTimer: Timer?
     private var processingStartTime: Date?
@@ -47,6 +52,11 @@ class MeetingAssistantViewModel: ObservableObject {
     private var streamingStartTime: Date?  // Track streaming recording start time
     
     public init() {
+        // Check if API key is configured and set initial state
+        if APIKeyManager.shared.hasAPIKey() {
+            self.useOnlineSummarization = true  // Default to online if API key exists
+        }
+        
         // Check model readiness periodically since they load asynchronously
         Task { @MainActor in
             // Wait a bit for models to start loading
@@ -60,6 +70,27 @@ class MeetingAssistantViewModel: ObservableObject {
                 }
                 try? await Task.sleep(nanoseconds: 500_000_000) // 0.5 seconds
             }
+        }
+    }
+    
+    /// Toggle between local and online summarization
+    public func toggleSummarizationProvider() {
+        if useOnlineSummarization {
+            // Switch to online
+            if let apiKey = APIKeyManager.shared.getAPIKey() {
+                let endpoint = APIKeyManager.shared.getAPIEndpoint()
+                let model = APIKeyManager.shared.getModelName()
+                summaryService.switchToOnlineProvider(apiKey: apiKey, endpoint: endpoint, model: model)
+                statusMessage = "Using online API for summarization"
+            } else {
+                // No API key configured, keep it off
+                useOnlineSummarization = false
+                statusMessage = "Please configure API key in settings"
+            }
+        } else {
+            // Switch to local
+            summaryService.switchToLocalProvider()
+            statusMessage = "Using on-device model for summarization"
         }
     }
     
