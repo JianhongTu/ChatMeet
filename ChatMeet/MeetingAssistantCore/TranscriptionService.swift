@@ -3,6 +3,7 @@
 //  MeetingAssistantCore
 //
 //  Service for transcribing audio to text using Whisper or Parakeet models
+//  Refactored to use the new TranscriptionCoordinator architecture
 //
 
 import Foundation
@@ -10,14 +11,16 @@ import Foundation
 /// Service that handles audio transcription using the Whisper or Parakeet model
 class TranscriptionService: @unchecked Sendable {
     
-    private var whisperModel: WhisperModel?
-    private var parakeetModel: ParakeetModel?
-    private var currentModel: TranscriptionModel?
+    // New architecture components
+    private let coordinator = TranscriptionCoordinator()
+    private let streamingCoordinator = StreamingTranscriptionCoordinator()
     
-    private var streamingProcessor: StreamingAudioProcessor?
-    private var streamingContext: StreamingTranscriptionContext?
-    private var isStreaming = false
-    private var cumulativeTranscription = ""
+    // Legacy components (will be removed after migration)
+    private var whisperModel: WhisperModel?  // Keep for backward compatibility during transition
+    
+    // Track current model selection
+    private var currentModelType: TranscriptionModel?
+    private var currentModelService: TranscriptionModelProtocol?
     
     // Model readiness states
     private(set) var isTranscriptionModelReady = false
@@ -31,33 +34,38 @@ class TranscriptionService: @unchecked Sendable {
     public func switchModel(to model: TranscriptionModel) async throws {
         print("TranscriptionService: 🔄 Switching to \(model.displayName)...")
         
-        // Unload current model if any
+        // Unload current coordinators
+        coordinator.unloadModel()
+        streamingCoordinator.stopStreaming()
+        
+        // Also unload legacy components
         whisperModel?.unloadModel()
-        parakeetModel?.unloadModel()
         whisperModel = nil
-        parakeetModel = nil
+        currentModelService = nil
         isTranscriptionModelReady = false
         
-        // Load the new model
+        // Load the new model through coordinator
         switch model {
         case .none:
             // No model selected - just keep everything unloaded
             print("TranscriptionService: ⚠️ No model selected")
             
         case .whisperTiny:
-            let newWhisper = WhisperModel()
-            try await newWhisper.loadModel()
-            whisperModel = newWhisper
-            isTranscriptionModelReady = newWhisper.isReady
+            // Load through new architecture
+            let modelService = WhisperModelService()
+            try await coordinator.loadModel(modelService)
+            currentModelService = modelService
+            isTranscriptionModelReady = coordinator.isReady
             
         case .parakeetV3:
-            let newParakeet = ParakeetModel()
-            try await newParakeet.loadModel()
-            parakeetModel = newParakeet
-            isTranscriptionModelReady = newParakeet.isReady
+            // Load through new architecture
+            let modelService = ParakeetModelService()
+            try await coordinator.loadModel(modelService)
+            currentModelService = modelService
+            isTranscriptionModelReady = coordinator.isReady
         }
         
-        currentModel = model
+        currentModelType = model
         print("TranscriptionService: ✅ Switched to \(model.displayName)")
     }
     
@@ -82,30 +90,30 @@ class TranscriptionService: @unchecked Sendable {
             throw TranscriptionError.modelNotLoaded
         }
         
-        // Process through the selected model with streaming
+        // Convert Data to AudioData
+        let samples = try AudioPreprocessor.extractPCMSamples(from: audioData)
+        let audio = AudioData(
+            samples: samples,
+            sampleRate: 16000,
+            format: .wav
+        )
+        
+        // Use the new coordinator with auto mode for short audio
         do {
-            let transcription: String
-            
-            if let whisper = whisperModel {
-                transcription = try await whisper.transcribe(audioData, onProgress: onProgress)
-            } else if let parakeet = parakeetModel {
-                transcription = try await parakeet.transcribe(audioData, onProgress: onProgress)
-            } else {
-                throw TranscriptionError.modelNotLoaded
+            let result = try await coordinator.transcribe(audio, mode: .auto) { progress in
+                if let onProgress = onProgress {
+                    onProgress(progress.partialText)
+                }
             }
             
             // Validate we got some output
-            guard !transcription.isEmpty else {
+            guard !result.text.isEmpty else {
                 throw TranscriptionError.noSpeechDetected
             }
             
-            return transcription
+            return result.text
             
-        } catch let error as WhisperError {
-            // Convert Whisper errors to TranscriptionError
-            throw TranscriptionError.transcriptionFailed(error.localizedDescription)
-        } catch let error as ParakeetError {
-            // Convert Parakeet errors to TranscriptionError
+        } catch let error as TranscriptionCoordinatorError {
             throw TranscriptionError.transcriptionFailed(error.localizedDescription)
         } catch {
             throw TranscriptionError.transcriptionFailed(error.localizedDescription)
@@ -139,51 +147,37 @@ class TranscriptionService: @unchecked Sendable {
             throw TranscriptionError.modelNotLoaded
         }
         
-        // Extract samples to check duration
+        // Convert Data to AudioData
         let samples = try AudioPreprocessor.extractPCMSamples(from: audioData)
-        let duration = Double(samples.count) / 16000.0
+        let audio = AudioData(
+            samples: samples,
+            sampleRate: 16000,
+            format: .wav
+        )
         
-        print("TranscriptionService: Audio duration: \(String(format: "%.1f", duration))s")
+        print("TranscriptionService: Audio duration: \(String(format: "%.1f", audio.duration))s")
         
-        // For audio <= 30s, use regular transcription
-        if duration <= 30.0 {
-            print("TranscriptionService: Using standard transcription (audio <= 30s)")
-            return try await transcribe(audioData, onProgress: onProgress)
-        }
+        // Use the new coordinator with batch mode for long audio
+        let mode: TranscriptionMode = audio.duration > 30.0 
+            ? .batch(maxWindow: windowDuration) 
+            : .auto
         
-        // For longer audio, use rolling window
-        print("TranscriptionService: Using rolling window transcription (audio > 30s)")
+        print("TranscriptionService: Using \(mode) mode")
         
         do {
-            let transcription: String
-            
-            if let whisper = whisperModel {
-                transcription = try await whisper.transcribeLongAudio(
-                    audioData,
-                    windowDuration: windowDuration,
-                    overlapDuration: overlapDuration,
-                    onProgress: onProgress
-                )
-            } else if let parakeet = parakeetModel {
-                transcription = try await parakeet.transcribeLongAudio(
-                    audioData,
-                    windowDuration: windowDuration,
-                    overlapDuration: overlapDuration,
-                    onProgress: onProgress
-                )
-            } else {
-                throw TranscriptionError.modelNotLoaded
+            let result = try await coordinator.transcribe(audio, mode: mode) { progress in
+                if let onProgress = onProgress {
+                    onProgress(progress.partialText)
+                }
             }
             
-            guard !transcription.isEmpty else {
+            guard !result.text.isEmpty else {
                 throw TranscriptionError.noSpeechDetected
             }
             
-            return transcription
+            return result.text
             
-        } catch let error as WhisperError {
-            throw TranscriptionError.transcriptionFailed(error.localizedDescription)
-        } catch let error as ParakeetError {
+        } catch let error as TranscriptionCoordinatorError {
             throw TranscriptionError.transcriptionFailed(error.localizedDescription)
         } catch {
             throw TranscriptionError.transcriptionFailed(error.localizedDescription)
@@ -194,7 +188,7 @@ class TranscriptionService: @unchecked Sendable {
     /// - Parameters:
     ///   - onUpdate: Callback invoked with cumulative transcription updates
     public func startStreamingTranscription(onUpdate: @escaping @Sendable (String) -> Void) throws {
-        guard !isStreaming else {
+        guard !streamingCoordinator.isCurrentlyStreaming else {
             throw TranscriptionError.alreadyStreaming
         }
         
@@ -202,83 +196,41 @@ class TranscriptionService: @unchecked Sendable {
             throw TranscriptionError.modelNotLoaded
         }
         
-        // Only Whisper supports streaming for now
-        guard whisperModel != nil else {
+        guard let modelService = currentModelService else {
+            throw TranscriptionError.modelNotLoaded
+        }
+        
+        // Verify model supports streaming
+        guard modelService.capabilities.supportsStreaming else {
             throw TranscriptionError.streamingNotSupported
         }
         
-        isStreaming = true
-        cumulativeTranscription = ""
+        // Create live audio source
+        let audioSource = LiveAudioSource(
+            chunkDuration: 5.0,
+            sampleRate: 16000,
+            maxBufferDuration: 30.0
+        )
         
-        // Create streaming context to maintain decoder state across chunks
-        streamingContext = StreamingTranscriptionContext()
+        // Start streaming through coordinator
+        try streamingCoordinator.startStreaming(
+            model: modelService,
+            audioSource: audioSource,
+            onUpdate: onUpdate
+        )
         
-        streamingProcessor = StreamingAudioProcessor()
-        
-        // Start streaming with 5-second chunk processing
-        try streamingProcessor?.startStreaming { [weak self] audioChunk in
-            guard let self = self, let context = self.streamingContext, let whisper = self.whisperModel else { return }
-            
-            // Process each chunk incrementally through Whisper
-            Task { @MainActor in
-                do {
-                    let totalContextTokens = context.contextTokens.count
-                    
-                    // Track the base transcription at start of chunk
-                    let baseTranscription = self.cumulativeTranscription
-                    let needsSpace = !baseTranscription.isEmpty
-                    
-                    // Get only NEW text from this chunk with token-by-token streaming
-                    let newText = try await whisper.transcribeIncremental(
-                        audioData: audioChunk,
-                        context: context,
-                        onProgress: { partialText in
-                            // Stream each token update with cumulative text
-                            var streamedText = baseTranscription
-                            if needsSpace {
-                                streamedText += " "
-                            }
-                            streamedText += partialText
-                            onUpdate(streamedText)
-                        }
-                    )
-                    
-                    print("🟢 TranscriptionService: Chunk produced \(newText.count) characters of new text")
-                    
-                    // Update final cumulative transcription
-                    if !newText.isEmpty {
-                        // Add space between chunks if there's already content
-                        if !self.cumulativeTranscription.isEmpty {
-                            self.cumulativeTranscription += " "
-                        }
-                        self.cumulativeTranscription += newText
-                        print("🟢 TranscriptionService: Updated UI with cumulative text (\(self.cumulativeTranscription.count) chars total)")
-                    } else {
-                        print("⚠️ TranscriptionService: Chunk produced NO new text")
-                    }
-                    
-                } catch {
-                    // Continue processing even if one chunk fails
-                    print("❌ TranscriptionService: Chunk processing failed: \(error)")
-                }
-            }
-        }
+        print("TranscriptionService: ✅ Started streaming transcription")
     }
     
     /// Stop real-time streaming transcription
     public func stopStreamingTranscription() {
-        guard isStreaming else { return }
-        
-        streamingProcessor?.stopStreaming()
-        streamingProcessor = nil
-        streamingContext = nil
-        cumulativeTranscription = ""
-        isStreaming = false
+        streamingCoordinator.stopStreaming()
+        print("TranscriptionService: 🛑 Stopped streaming transcription")
     }
     
     /// Check if currently streaming
     public var isCurrentlyStreaming: Bool {
-        return isStreaming
+        return streamingCoordinator.isCurrentlyStreaming
     }
 }
 
