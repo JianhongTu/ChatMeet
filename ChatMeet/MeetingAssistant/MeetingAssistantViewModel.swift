@@ -264,7 +264,12 @@ class MeetingAssistantViewModel: ObservableObject {
         statusMessage = "Transcribing audio..."
         transcriptionStartTime = Date()
         do {
-            let transcribedText = try await transcriptionService.transcribe(audioData) { [weak self] partialText in
+            // Automatically use long audio transcription for files > 30s
+            let transcribedText = try await transcriptionService.transcribeLongAudio(
+                audioData,
+                windowDuration: 20.0,  // 20s windows for better context
+                overlapDuration: 2.0    // 2s overlap to avoid missing words at boundaries
+            ) { [weak self] partialText in
                 // Stream partial transcription to UI in real-time
                 guard let self = self else { return }
                 Task { @MainActor in
@@ -297,7 +302,7 @@ class MeetingAssistantViewModel: ObservableObject {
             
             // If transcription failed but we had started, show helpful message
             if transcription.isEmpty {
-                transcription = "Transcription failed. Please check:\n• Microphone is working\n• Audio was recorded\n• Whisper models are loaded"
+                transcription = "Transcription failed. Please check:\n• Microphone is working\n• Audio was recorded\n• Models are loaded"
             }
         }
     }

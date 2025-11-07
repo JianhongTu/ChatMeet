@@ -112,6 +112,84 @@ class TranscriptionService: @unchecked Sendable {
         }
     }
     
+    /// Transcribe long audio using rolling window strategy
+    /// Automatically detects audio length and uses appropriate method
+    /// - Parameters:
+    ///   - audioData: Raw audio data to transcribe (16kHz WAV format)
+    ///   - windowDuration: Duration of each window in seconds (default: 20s)
+    ///   - overlapDuration: Overlap between windows in seconds (default: 2s)
+    ///   - onProgress: Optional callback for progress updates
+    /// - Returns: Complete transcribed text
+    public func transcribeLongAudio(
+        _ audioData: Data,
+        windowDuration: TimeInterval = 20.0,
+        overlapDuration: TimeInterval = 2.0,
+        onProgress: (@Sendable (String) -> Void)? = nil
+    ) async throws -> String {
+        // Validate audio data
+        guard !audioData.isEmpty else {
+            throw TranscriptionError.emptyAudioData
+        }
+        
+        guard audioData.count > 100 else {
+            throw TranscriptionError.audioTooShort
+        }
+        
+        guard isTranscriptionModelReady else {
+            throw TranscriptionError.modelNotLoaded
+        }
+        
+        // Extract samples to check duration
+        let samples = try AudioPreprocessor.extractPCMSamples(from: audioData)
+        let duration = Double(samples.count) / 16000.0
+        
+        print("TranscriptionService: Audio duration: \(String(format: "%.1f", duration))s")
+        
+        // For audio <= 30s, use regular transcription
+        if duration <= 30.0 {
+            print("TranscriptionService: Using standard transcription (audio <= 30s)")
+            return try await transcribe(audioData, onProgress: onProgress)
+        }
+        
+        // For longer audio, use rolling window
+        print("TranscriptionService: Using rolling window transcription (audio > 30s)")
+        
+        do {
+            let transcription: String
+            
+            if let whisper = whisperModel {
+                transcription = try await whisper.transcribeLongAudio(
+                    audioData,
+                    windowDuration: windowDuration,
+                    overlapDuration: overlapDuration,
+                    onProgress: onProgress
+                )
+            } else if let parakeet = parakeetModel {
+                transcription = try await parakeet.transcribeLongAudio(
+                    audioData,
+                    windowDuration: windowDuration,
+                    overlapDuration: overlapDuration,
+                    onProgress: onProgress
+                )
+            } else {
+                throw TranscriptionError.modelNotLoaded
+            }
+            
+            guard !transcription.isEmpty else {
+                throw TranscriptionError.noSpeechDetected
+            }
+            
+            return transcription
+            
+        } catch let error as WhisperError {
+            throw TranscriptionError.transcriptionFailed(error.localizedDescription)
+        } catch let error as ParakeetError {
+            throw TranscriptionError.transcriptionFailed(error.localizedDescription)
+        } catch {
+            throw TranscriptionError.transcriptionFailed(error.localizedDescription)
+        }
+    }
+    
     /// Start real-time streaming transcription with sliding window and KV cache reuse
     /// - Parameters:
     ///   - onUpdate: Callback invoked with cumulative transcription updates

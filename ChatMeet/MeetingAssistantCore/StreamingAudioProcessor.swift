@@ -212,50 +212,9 @@ class StreamingAudioProcessor: NSObject, @unchecked Sendable {
         return outputBuffer
     }
     
-    /// Convert float samples to WAV format
+    /// Convert float samples to WAV format (wrapper around shared utility)
     private func convertToWAV(samples: [Float]) -> Data? {
-        let sampleCount = samples.count
-        let byteCount = sampleCount * 2  // 16-bit PCM
-        
-        // Create WAV header
-        var wavData = Data()
-        
-        // RIFF header
-        wavData.append(contentsOf: "RIFF".utf8)
-        let fileSize = UInt32(36 + byteCount)
-        wavData.append(contentsOf: withUnsafeBytes(of: fileSize.littleEndian) { Data($0) })
-        wavData.append(contentsOf: "WAVE".utf8)
-        
-        // fmt chunk
-        wavData.append(contentsOf: "fmt ".utf8)
-        let fmtChunkSize = UInt32(16)
-        wavData.append(contentsOf: withUnsafeBytes(of: fmtChunkSize.littleEndian) { Data($0) })
-        let audioFormat = UInt16(1)  // PCM
-        wavData.append(contentsOf: withUnsafeBytes(of: audioFormat.littleEndian) { Data($0) })
-        let numChannels = UInt16(channelCount)
-        wavData.append(contentsOf: withUnsafeBytes(of: numChannels.littleEndian) { Data($0) })
-        let sampleRateInt = UInt32(sampleRate)
-        wavData.append(contentsOf: withUnsafeBytes(of: sampleRateInt.littleEndian) { Data($0) })
-        let byteRate = UInt32(sampleRate * Double(channelCount * 2))
-        wavData.append(contentsOf: withUnsafeBytes(of: byteRate.littleEndian) { Data($0) })
-        let blockAlign = UInt16(channelCount * 2)
-        wavData.append(contentsOf: withUnsafeBytes(of: blockAlign.littleEndian) { Data($0) })
-        let bitsPerSample = UInt16(16)
-        wavData.append(contentsOf: withUnsafeBytes(of: bitsPerSample.littleEndian) { Data($0) })
-        
-        // data chunk
-        wavData.append(contentsOf: "data".utf8)
-        let dataChunkSize = UInt32(byteCount)
-        wavData.append(contentsOf: withUnsafeBytes(of: dataChunkSize.littleEndian) { Data($0) })
-        
-        // Convert float samples to 16-bit PCM
-        for sample in samples {
-            let clampedSample = max(-1.0, min(1.0, sample))
-            let intSample = Int16(clampedSample * 32767.0)
-            wavData.append(contentsOf: withUnsafeBytes(of: intSample.littleEndian) { Data($0) })
-        }
-        
-        return wavData
+        return AudioPreprocessor.convertSamplesToWAV(samples, sampleRate: Int(sampleRate))
     }
     
     /// Get current buffer status

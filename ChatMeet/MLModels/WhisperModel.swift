@@ -284,6 +284,155 @@ class WhisperModel: @unchecked Sendable {
         return mlArray
     }
     
+    /// Transcribe long audio using rolling window strategy
+    /// - Parameters:
+    ///   - audioData: Raw audio data in WAV format (16kHz, mono, PCM)
+    ///   - windowDuration: Duration of each window in seconds (default: 20s for batch, 5s for streaming)
+    ///   - overlapDuration: Overlap between windows in seconds (default: 2s)
+    ///   - onProgress: Optional callback for progress updates with partial transcription
+    /// - Returns: Complete transcribed text
+    public func transcribeLongAudio(
+        _ audioData: Data,
+        windowDuration: TimeInterval = 20.0,
+        overlapDuration: TimeInterval = 2.0,
+        onProgress: (@Sendable (String) -> Void)? = nil
+    ) async throws -> String {
+        guard encoderModel != nil, decoderModel != nil, tokenizer != nil else {
+            throw WhisperError.modelNotLoaded
+        }
+        
+        // 1. Extract PCM samples
+        let allSamples = try AudioPreprocessor.extractPCMSamples(from: audioData)
+        let sampleRate = 16000
+        let totalDuration = Double(allSamples.count) / Double(sampleRate)
+        
+        print("WhisperModel: Transcribing long audio - duration: \(String(format: "%.1f", totalDuration))s, window: \(windowDuration)s, overlap: \(overlapDuration)s")
+        
+        // 2. Calculate window parameters
+        let windowSamples = Int(windowDuration * Double(sampleRate))
+        let overlapSamples = Int(overlapDuration * Double(sampleRate))
+        let hopSamples = windowSamples - overlapSamples
+        
+        guard windowSamples <= 480000 else {
+            throw WhisperError.inferenceFailed("Window duration too long (max 30s)")
+        }
+        
+        // 3. Process audio in windows
+        var transcriptionSegments: [String] = []
+        var startSample = 0
+        var windowIndex = 0
+        var previousWindowEndSample = 0  // Track where last window ended
+        
+        while startSample < allSamples.count {
+            let endSample = min(startSample + windowSamples, allSamples.count)
+            let windowSampleSlice = Array(allSamples[startSample..<endSample])
+            
+            // Pad to expected length for model
+            let paddedWindow = AudioPreprocessor.padOrTrim(windowSampleSlice, to: 480000)
+            
+            // Convert to WAV data for transcription
+            let windowWavData = AudioPreprocessor.convertSamplesToWAV(paddedWindow, sampleRate: sampleRate)
+            
+            // Transcribe this window
+            print("WhisperModel: Processing window \(windowIndex + 1) (\(String(format: "%.1f", Double(startSample) / Double(sampleRate)))s - \(String(format: "%.1f", Double(endSample) / Double(sampleRate)))s)")
+            
+            let segmentText = try await transcribe(windowWavData, onProgress: nil)
+            
+            // For windows after the first, we need to estimate and skip the overlapping portion
+            if windowIndex > 0 && !segmentText.isEmpty {
+                // Calculate what percentage of this window is overlap vs new
+                let overlapRatio = Double(overlapSamples) / Double(windowSampleSlice.count)
+                
+                // Split transcription: skip roughly the first portion that corresponds to overlap
+                let words = segmentText.split(separator: " ").map(String.init)
+                let wordsToSkip = Int(Double(words.count) * overlapRatio)
+                
+                if wordsToSkip < words.count {
+                    let newWords = words.dropFirst(wordsToSkip)
+                    if !newWords.isEmpty {
+                        transcriptionSegments.append(newWords.joined(separator: " "))
+                        print("WhisperModel: Window \(windowIndex + 1) - skipped \(wordsToSkip) overlap words, kept \(newWords.count) new words")
+                    }
+                } else {
+                    print("WhisperModel: Window \(windowIndex + 1) - all words appear to be overlap, skipping")
+                }
+            } else if !segmentText.isEmpty {
+                // First window - keep everything
+                transcriptionSegments.append(segmentText)
+            }
+            
+            // Report progress
+            if let onProgress = onProgress, !transcriptionSegments.isEmpty {
+                let combinedText = transcriptionSegments.joined(separator: " ")
+                onProgress(combinedText)
+            }
+            
+            // Move to next window
+            previousWindowEndSample = endSample
+            startSample += hopSamples
+            windowIndex += 1
+            
+            // Safety check to prevent infinite loop
+            if hopSamples <= 0 {
+                break
+            }
+        }
+        
+        // 4. Combine segments (simple concatenation now since overlap is handled)
+        let finalText = transcriptionSegments.joined(separator: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        
+        print("WhisperModel: Long audio transcription complete - \(windowIndex) windows, \(transcriptionSegments.count) segments")
+        
+        return finalText
+    }
+    
+    /// Deduplicate overlapping text at segment boundaries
+    private func deduplicateTranscriptionSegments(_ segments: [String]) -> String {
+        guard segments.count > 1 else {
+            return segments.first ?? ""
+        }
+        
+        var result = segments[0]
+        
+        for i in 1..<segments.count {
+            let currentSegment = segments[i]
+            
+            // Try to find overlap by checking if the end of result matches beginning of current segment
+            let resultWords = result.split(separator: " ").map(String.init)
+            let currentWords = currentSegment.split(separator: " ").map(String.init)
+            
+            // Look for longest common suffix/prefix (up to 50% of either segment)
+            var bestOverlapLength = 0
+            let maxOverlapWords = min(resultWords.count / 2, currentWords.count / 2, 10)
+            
+            for overlapLength in (1...maxOverlapWords).reversed() {
+                let resultSuffix = resultWords.suffix(overlapLength)
+                let currentPrefix = currentWords.prefix(overlapLength)
+                
+                if Array(resultSuffix) == Array(currentPrefix) {
+                    bestOverlapLength = overlapLength
+                    break
+                }
+            }
+            
+            if bestOverlapLength > 0 {
+                // Found overlap, skip those words from current segment
+                let remainingWords = currentWords.dropFirst(bestOverlapLength)
+                if !remainingWords.isEmpty {
+                    result += " " + remainingWords.joined(separator: " ")
+                }
+            } else {
+                // No overlap found, just concatenate
+                if !currentSegment.isEmpty {
+                    result += " " + currentSegment
+                }
+            }
+        }
+        
+        return result.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+    
     /// Run encoder model on raw audio waveform
     /// - Parameters:
     ///   - encoder: Encoder MLModel
