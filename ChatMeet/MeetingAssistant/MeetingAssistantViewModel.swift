@@ -476,8 +476,17 @@ class MeetingAssistantViewModel: ObservableObject {
     }
     
     /// Process an uploaded audio file
-    /// - Parameter fileURL: URL of the uploaded file
+    /// - Parameter fileURL: URL of the uploaded file (may be security-scoped)
     public func processUploadedFile(fileURL: URL) async {
+        // Start accessing security-scoped resource
+        let accessingResource = fileURL.startAccessingSecurityScopedResource()
+        
+        defer {
+            if accessingResource {
+                fileURL.stopAccessingSecurityScopedResource()
+            }
+        }
+        
         statusMessage = "Processing uploaded file..."
         transcription = "Converting audio file..."
         summaryBulletPoints = []
@@ -487,7 +496,7 @@ class MeetingAssistantViewModel: ObservableObject {
         // Convert and process the audio file
         guard let audioData = await audioRecorder.processUploadedFile(fileURL: fileURL) else {
             statusMessage = "Failed to process file"
-            transcription = "Error: Could not convert audio file. Supported formats: M4A, WAV"
+            transcription = "Error: Could not convert audio file. Supported formats: M4A, WAV, SPHERE (.sph)"
             return
         }
         

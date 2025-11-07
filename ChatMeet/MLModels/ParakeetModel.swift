@@ -26,11 +26,11 @@ class ParakeetModel: @unchecked Sendable {
     private var tokenizer: Tokenizer?
     
     // Model configuration
-    private let modelName = "mlx-community/parakeet-tdt-0.6b-v3"
+    private let modelName = "ToviTu/parakeet-tdt-0.6b-v3-coreml"
     private let preprocessorModelName = "ParakeetPreprocessor"
-    private let encoderModelName = "ParakeetEncoderInt4"
-    private let decoderModelName = "ParakeetDecoderInt4"
-    private let joinerModelName = "ParakeetJoinerInt4"
+    private let encoderModelName = "ParakeetEncoder"
+    private let decoderModelName = "ParakeetDecoder"
+    private let joinerModelName = "ParakeetJoiner"
     
     // Audio configuration
     private let sampleRate: Float = 16000.0
@@ -47,9 +47,9 @@ class ParakeetModel: @unchecked Sendable {
     public func loadModel() async throws {
         print("ParakeetModel: 🔄 Starting model loading...")
         
-        // Configure Core ML to use CPU and GPU
+        // Configure Core ML to use all available accelerators (CPU, GPU, Neural Engine)
         let config = MLModelConfiguration()
-        config.computeUnits = .cpuAndGPU
+        config.computeUnits = .all
         
         // Load all four models
         try await loadPreprocessor(config: config)
@@ -158,27 +158,440 @@ class ParakeetModel: @unchecked Sendable {
         return nil
     }
     
-    // MARK: - Inference (To be implemented)
+    // MARK: - Inference
     
-    /// Transcribe audio data to text
+    /// Transcribe audio data to text using Parakeet TDT greedy decoding
     /// - Parameters:
     ///   - audioData: Raw audio data in WAV format (16kHz, mono, PCM)
     ///   - onProgress: Optional callback for real-time token streaming
     /// - Returns: Final transcribed text
-    /// - Note: Inference logic to be implemented
     public func transcribe(_ audioData: Data, onProgress: (@Sendable (String) -> Void)? = nil) async throws -> String {
         guard isReady else {
             throw ParakeetError.modelNotLoaded
         }
         
-        // TODO: Implement Parakeet RNN-T inference pipeline
-        // 1. Extract PCM samples using AudioPreprocessor
-        // 2. Run preprocessor to get mel features
-        // 3. Run encoder to get acoustic embeddings
-        // 4. Run greedy decoding with decoder + joiner
-        // 5. Decode tokens to text
+        guard let preprocessor = preprocessorModel,
+              let encoder = encoderModel,
+              let decoder = decoderModel,
+              let joiner = joinerModel,
+              let tokenizer = tokenizer else {
+            throw ParakeetError.modelNotLoaded
+        }
         
-        throw ParakeetError.notImplemented("Parakeet inference not yet implemented")
+        // 1. Extract PCM samples from WAV data using AudioPreprocessor
+        let samples = try AudioPreprocessor.extractPCMSamples(from: audioData)
+        
+        // Pad/trim to expected length (30 seconds = 480,000 samples at 16kHz)
+        let expectedSamples = 480000
+        let paddedSamples = AudioPreprocessor.padOrTrim(samples, to: expectedSamples)
+        
+        // 2. Run preprocessor (PCM -> mel spectrogram)
+        let (melFeatures, featureLengths) = try runPreprocessor(preprocessor, audioSamples: paddedSamples)
+        print("ParakeetModel: Preprocessor output shape: \(melFeatures.shape), lengths: \(featureLengths)")
+        
+        // Create featureLengths array for encoder
+        let lengthArray = try MLMultiArray(shape: [1], dataType: .int32)
+        lengthArray[0] = NSNumber(value: featureLengths)
+        
+        // 3. Run encoder (mel -> acoustic embeddings)
+        // The encoder compresses time steps: 3001 -> 376
+        let acousticEmbeddings = try runEncoder(encoder, melFeatures: melFeatures, featureLengths: lengthArray)
+        print("ParakeetModel: Encoder output shape: \(acousticEmbeddings.shape)")
+        
+        // 4. Run greedy decoding with decoder + joiner
+        let tokenIds = try await runGreedyDecoding(
+            decoder: decoder,
+            joiner: joiner,
+            acousticEmbeddings: acousticEmbeddings,
+            onProgress: onProgress,
+            tokenizer: tokenizer
+        )
+        
+        // 5. Decode tokens to text
+        let transcription = tokenizer.decode(tokens: tokenIds)
+        
+        return transcription.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+    
+    // MARK: - Preprocessing
+    
+    /// Run preprocessor to convert PCM audio to mel spectrogram
+    private func runPreprocessor(_ model: MLModel, audioSamples: [Float]) throws -> (MLMultiArray, Int) {
+        // Create input array with shape [1, 480000]
+        let audioArray = try MLMultiArray(shape: [1, audioSamples.count as NSNumber], dataType: .float32)
+        for (i, sample) in audioSamples.enumerated() {
+            audioArray[[0, i] as [NSNumber]] = NSNumber(value: sample)
+        }
+        
+        // Create audio length array with shape [1]
+        let lengthArray = try MLMultiArray(shape: [1], dataType: .int32)
+        lengthArray[0] = NSNumber(value: audioSamples.count)
+        
+        // Create input provider
+        let inputProvider = try MLDictionaryFeatureProvider(dictionary: [
+            "audio_signal": MLFeatureValue(multiArray: audioArray),
+            "audio_length": MLFeatureValue(multiArray: lengthArray)
+        ])
+        
+        // Run model
+        let outputProvider = try model.prediction(from: inputProvider)
+        
+        // Extract features output
+        guard let features = outputProvider.featureValue(for: "mel")?.multiArrayValue else {
+            throw NSError(domain: "ParakeetModel", code: 2, userInfo: [NSLocalizedDescriptionKey: "Failed to extract preprocessor mel output"])
+        }
+        
+        // Extract featureLengths output
+        // Shape is [1], contains the number of mel frames
+        guard let featureLengthsArray = outputProvider.featureValue(for: "mel_length")?.multiArrayValue else {
+            throw NSError(domain: "ParakeetModel", code: 2, userInfo: [NSLocalizedDescriptionKey: "Failed to extract preprocessor mel_length output"])
+        }
+        
+        let featureLengths = featureLengthsArray[0].intValue
+        print("ParakeetModel: Extracted mel_length = \(featureLengths), mel shape = \(features.shape)")
+        
+        return (features, featureLengths)
+    }
+    
+    /// Truncate mel features to a maximum length along the time dimension
+    /// - Parameters:
+    ///   - melFeatures: Input mel features with shape [1, 128, T]
+    ///   - toLength: Maximum length for the time dimension
+    /// - Returns: Truncated mel features with shape [1, 128, min(T, toLength)]
+    private func truncateMelFeatures(_ melFeatures: MLMultiArray, toLength maxLength: Int) throws -> MLMultiArray {
+        let shape = melFeatures.shape
+        let batchSize = shape[0].intValue
+        let melBins = shape[1].intValue
+        let timeSteps = shape[2].intValue
+        
+        // If already within limit, return original
+        if timeSteps <= maxLength {
+            return melFeatures
+        }
+        
+        // Create truncated array [1, 128, maxLength]
+        let truncated = try MLMultiArray(shape: [NSNumber(value: batchSize), NSNumber(value: melBins), NSNumber(value: maxLength)], dataType: .float32)
+        
+        // Copy data up to maxLength
+        for t in 0..<maxLength {
+            for m in 0..<melBins {
+                let value = melFeatures[[0, m, t] as [NSNumber]].floatValue
+                truncated[[0, m, t] as [NSNumber]] = NSNumber(value: value)
+            }
+        }
+        
+        return truncated
+    }
+    
+    // MARK: - Encoder
+    
+    /// Run encoder model (mel features -> acoustic embeddings)
+    /// - Parameters:
+    ///   - encoder: Encoder MLModel
+    ///   - melFeatures: Mel spectrogram features from preprocessor
+    ///   - featureLengths: Feature lengths from preprocessor
+    /// - Returns: Acoustic embeddings [T, 1, D]
+    private func runEncoder(_ encoder: MLModel, melFeatures: MLMultiArray, featureLengths: MLMultiArray) throws -> MLMultiArray {
+        
+        // Run encoder (input: mel, mel_length)
+        let inputFeatures = try MLDictionaryFeatureProvider(dictionary: [
+            "mel": MLFeatureValue(multiArray: melFeatures),
+            "mel_length": MLFeatureValue(multiArray: featureLengths)
+        ])
+        
+        let output = try encoder.prediction(from: inputFeatures)
+
+        print("ParakeetModel: Encoder mel_length = \(featureLengths)")
+        
+        // Extract acoustic embeddings (output: encoder, encoder_length)
+        guard let embeddings = output.featureValue(for: "encoder")?.multiArrayValue else {
+            throw ParakeetError.inferenceFailed("Failed to extract acoustic embeddings from encoder")
+        }
+        
+        // Transpose from [1, 1024, T] to [T, 1, 1024] for RNN-T decoding
+        return try transposeEncoderOutput(embeddings)
+    }
+    
+    /// Transpose encoder output from [1, D, T] to [T, 1, D]
+    private func transposeEncoderOutput(_ input: MLMultiArray) throws -> MLMultiArray {
+        let shape = input.shape
+        let batchSize = shape[0].intValue
+        let hiddenDim = shape[1].intValue
+        let timeSteps = shape[2].intValue
+        
+        // Create output array [T, 1, D]
+        let output = try MLMultiArray(shape: [NSNumber(value: timeSteps), NSNumber(value: batchSize), NSNumber(value: hiddenDim)], dataType: .float32)
+        
+        // Transpose
+        for t in 0..<timeSteps {
+            for d in 0..<hiddenDim {
+                let value = input[[0, d, t] as [NSNumber]].floatValue
+                output[[t, 0, d] as [NSNumber]] = NSNumber(value: value)
+            }
+        }
+        
+        return output
+    }
+    
+    // MARK: - Greedy Decoding
+    
+    /// Run greedy decoding with decoder and joiner (RNN-T algorithm)
+    /// - Parameters:
+    ///   - decoder: Decoder MLModel
+    ///   - joiner: Joiner MLModel
+    ///   - acousticEmbeddings: Acoustic embeddings from encoder [T, 1, D]
+    ///   - onProgress: Optional progress callback
+    ///   - tokenizer: Tokenizer for decoding
+    /// - Returns: Array of predicted token IDs
+    private func runGreedyDecoding(
+        decoder: MLModel,
+        joiner: MLModel,
+        acousticEmbeddings: MLMultiArray,
+        onProgress: (@Sendable (String) -> Void)?,
+        tokenizer: Tokenizer
+    ) async throws -> [Int] {
+        let timeSteps = acousticEmbeddings.shape[0].intValue
+        // For Parakeet TDT, blank token ID is 8192 (vocabulary size)
+        let blankId = 8192
+        let maxSymbols = 10
+        let durations = [0, 1, 2, 3, 4]  // Duration tokens at indices 8193-8197
+        
+        var ySequence: [Int] = []
+        var lastToken: Int? = nil  // nil means we need to initialize with blank
+        
+        // Initialize decoder LSTM states [num_layers, batch_size, hidden_size]
+        let numLayers = 2
+        let batchSize = 1
+        let hiddenSize = 640
+        
+        var stateH = try MLMultiArray(shape: [NSNumber(value: numLayers), NSNumber(value: batchSize), NSNumber(value: hiddenSize)], dataType: .float32)
+        var stateC = try MLMultiArray(shape: [NSNumber(value: numLayers), NSNumber(value: batchSize), NSNumber(value: hiddenSize)], dataType: .float32)
+        
+        // Initialize states to zeros
+        for i in 0..<(numLayers * batchSize * hiddenSize) {
+            stateH[i] = 0.0
+            stateC[i] = 0.0
+        }
+        
+        var timeIdx = 0
+        var iterationCount = 0
+        
+        print("ParakeetModel: Starting greedy decoding (T=\(timeSteps), blank=\(blankId))")
+        
+        while timeIdx < timeSteps {
+            iterationCount += 1
+            if iterationCount % 50 == 0 {
+                print("ParakeetModel: Decoding progress - timeIdx: \(timeIdx)/\(timeSteps), tokens: \(ySequence.count)")
+            }
+            // Extract current frame [1, 1, D] from [T, 1, D]
+            let frame = try extractFrame(from: acousticEmbeddings, at: timeIdx)
+            
+            // Inner loop: keep predicting at same time step until blank or max_symbols
+            var symbolsAdded = 0
+            var needLoop = true
+            var skip = 0  // Track last skip value
+            
+            while needLoop && symbolsAdded < maxSymbols {
+                // Determine input token for decoder
+                // Use lastToken if we have one, otherwise use blank for initialization
+                let inputToken = lastToken ?? blankId
+                
+                let lastLabel = try createTokenArray(tokenId: inputToken)
+                
+                // Run decoder to get linguistic embedding
+                let linguisticEmbedding = try runDecoder(decoder, token: lastLabel, stateH: &stateH, stateC: &stateC)
+                
+                // Run joiner to get logits for this frame
+                let allLogits = try runJoinerForFrame(joiner, acoustic: frame, linguistic: linguisticEmbedding)
+                
+                // Split logits into vocabulary logits and duration logits
+                // allLogits shape: [8198] (8192 vocab + 1 blank + 5 duration)
+                let vocabSize = 8192
+                let vocabLogits = try extractVocabLogits(allLogits, vocabSize: vocabSize, numDurations: durations.count)
+                let durationLogits = try extractDurationLogits(allLogits, vocabSize: vocabSize, numDurations: durations.count)
+                
+                // Get best token from vocabulary (including blank at 8192)
+                let k = argmax(vocabLogits)
+                
+                // Get best duration
+                let durationIdx = argmax(durationLogits)
+                skip = durations[durationIdx]
+                
+                // Check if blank token
+                if k == blankId {
+                    // Blank predicted: exit inner loop, move to next time step
+                    // Only advance if skip > 0, otherwise advance by 1
+                    if skip > 0 {
+                        timeIdx += skip
+                    } else {
+                        timeIdx += 1
+                    }
+                    needLoop = false
+                } else {
+                    // Non-blank: add to sequence
+                    ySequence.append(k)
+                    lastToken = k
+                    
+                    // Stream progress if callback provided
+                    if let onProgress = onProgress {
+                        let partialText = tokenizer.decode(tokens: ySequence)
+                        onProgress(partialText)
+                    }
+                    
+                    // Increment counters
+                    symbolsAdded += 1
+                    
+                    // Handle time advancement based on skip
+                    if skip > 0 {
+                        timeIdx += skip
+                        needLoop = false  // Exit inner loop after advancing
+                    } else {
+                        // skip == 0: continue at same frame (emit multiple tokens)
+                        needLoop = true
+                    }
+                }
+            }
+            
+            // If we hit max_symbols, ensure we advance time
+            if symbolsAdded == maxSymbols && skip == 0 {
+                timeIdx += 1
+            }
+        }
+        
+        print("ParakeetModel: Greedy decoding complete (\(ySequence.count) tokens)")
+        
+        return ySequence
+    }
+    
+    /// Extract a single frame from acoustic embeddings
+    private func extractFrame(from embeddings: MLMultiArray, at timeIdx: Int) throws -> MLMultiArray {
+        let hiddenDim = embeddings.shape[2].intValue
+        let frame = try MLMultiArray(shape: [1, 1, NSNumber(value: hiddenDim)], dataType: .float32)
+        
+        for d in 0..<hiddenDim {
+            let value = embeddings[[timeIdx, 0, d] as [NSNumber]].floatValue
+            frame[[0, 0, d] as [NSNumber]] = NSNumber(value: value)
+        }
+        
+        return frame
+    }
+    
+    /// Create token array [1, 1] from token ID
+    private func createTokenArray(tokenId: Int) throws -> MLMultiArray {
+        let tokenArray = try MLMultiArray(shape: [1, 1], dataType: .int32)
+        tokenArray[[0, 0] as [NSNumber]] = NSNumber(value: tokenId)
+        return tokenArray
+    }
+    
+    /// Run decoder on single token with state
+    /// - Parameters:
+    ///   - decoder: Decoder MLModel
+    ///   - token: Token ID array [1, 1]
+    ///   - stateH: Hidden state (will be updated)
+    ///   - stateC: Cell state (will be updated)
+    /// - Returns: Linguistic embedding
+    private func runDecoder(_ decoder: MLModel, token: MLMultiArray, stateH: inout MLMultiArray, stateC: inout MLMultiArray) throws -> MLMultiArray {
+        // Create target_length array [1]
+        let targetLength = try MLMultiArray(shape: [1], dataType: .int32)
+        targetLength[0] = NSNumber(value: 1)
+        
+        // Decoder input: targets, target_length, h_in, c_in
+        let inputFeatures = try MLDictionaryFeatureProvider(dictionary: [
+            "targets": MLFeatureValue(multiArray: token),
+            "target_length": MLFeatureValue(multiArray: targetLength),
+            "h_in": MLFeatureValue(multiArray: stateH),
+            "c_in": MLFeatureValue(multiArray: stateC)
+        ])
+        
+        let output = try decoder.prediction(from: inputFeatures)
+        
+        // Decoder output: decoder, h_out, c_out
+        guard let embedding = output.featureValue(for: "decoder")?.multiArrayValue else {
+            throw ParakeetError.inferenceFailed("Failed to extract linguistic embedding from decoder")
+        }
+        
+        // Update states for next iteration
+        if let newStateH = output.featureValue(for: "h_out")?.multiArrayValue {
+            stateH = newStateH
+        }
+        if let newStateC = output.featureValue(for: "c_out")?.multiArrayValue {
+            stateC = newStateC
+        }
+        
+        return embedding
+    }
+    
+    /// Run joiner for a single frame (used in inner decoding loop)
+    /// - Parameters:
+    ///   - joiner: Joiner MLModel
+    ///   - acoustic: Single acoustic frame [1, 1, D]
+    ///   - linguistic: Linguistic embedding [1, 640, 1]
+    /// - Returns: Full logits array [8198] (vocab + blank + durations)
+    private func runJoinerForFrame(_ joiner: MLModel, acoustic: MLMultiArray, linguistic: MLMultiArray) throws -> [Float] {
+        // Need to reshape acoustic frame to match encoder input format [1, D, T]
+        // acoustic is [1, 1, 1024], need to transpose to [1, 1024, 1]
+        let hiddenDim = acoustic.shape[2].intValue
+        let acousticReshaped = try MLMultiArray(shape: [1, NSNumber(value: hiddenDim), 1], dataType: .float32)
+        
+        for d in 0..<hiddenDim {
+            let value = acoustic[[0, 0, d] as [NSNumber]].floatValue
+            acousticReshaped[[0, d, 0] as [NSNumber]] = NSNumber(value: value)
+        }
+        
+        let inputFeatures = try MLDictionaryFeatureProvider(dictionary: [
+            "encoder": MLFeatureValue(multiArray: acousticReshaped),
+            "decoder": MLFeatureValue(multiArray: linguistic)
+        ])
+        
+        let output = try joiner.prediction(from: inputFeatures)
+        
+        guard let logitsArray = output.featureValue(for: "logits")?.multiArrayValue else {
+            throw ParakeetError.inferenceFailed("Failed to extract logits from joiner")
+        }
+        
+        // Extract logits: Shape is [1, 1, 1, 8198], extract [0, 0, 0, :]
+        let vocabSize = 8198
+        var logits = [Float](repeating: 0, count: vocabSize)
+        
+        for i in 0..<vocabSize {
+            logits[i] = logitsArray[[0, 0, 0, i] as [NSNumber]].floatValue
+        }
+        
+        return logits
+    }
+    
+    /// Extract vocabulary logits (first 8193 elements: 8192 vocab + 1 blank)
+    private func extractVocabLogits(_ allLogits: [Float], vocabSize: Int, numDurations: Int) throws -> [Float] {
+        let vocabLength = vocabSize + 1  // vocab + blank
+        return Array(allLogits[0..<vocabLength])
+    }
+    
+    /// Extract duration logits (last 5 elements) and apply log softmax
+    private func extractDurationLogits(_ allLogits: [Float], vocabSize: Int, numDurations: Int) throws -> [Float] {
+        let startIdx = vocabSize + 1  // After vocab + blank
+        let durationLogits = Array(allLogits[startIdx..<(startIdx + numDurations)])
+        
+        // Apply log softmax
+        let maxLogit = durationLogits.max() ?? 0
+        let expSum = durationLogits.reduce(0.0) { $0 + exp($1 - maxLogit) }
+        let logSumExp = maxLogit + log(expSum)
+        
+        return durationLogits.map { $0 - logSumExp }
+    }
+    
+    /// Get index of maximum value (argmax)
+    private func argmax(_ array: [Float]) -> Int {
+        var maxIndex = 0
+        var maxValue = array[0]
+        
+        for (i, value) in array.enumerated() {
+            if value > maxValue {
+                maxValue = value
+                maxIndex = i
+            }
+        }
+        
+        return maxIndex
     }
 }
 

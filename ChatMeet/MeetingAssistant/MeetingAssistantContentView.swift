@@ -514,24 +514,18 @@ extension View {
     func fileImporterModifier(isPresented: Binding<Bool>, viewModel: MeetingAssistantViewModel) -> some View {
         self.fileImporter(
             isPresented: isPresented,
-            allowedContentTypes: [.audio],
+            allowedContentTypes: [
+                .audio,
+                UTType(filenameExtension: "sph") ?? .data,  // SPHERE/NIST audio files
+                UTType(filenameExtension: "wav") ?? .audio, // Explicitly allow WAV
+            ],
             allowsMultipleSelection: false
         ) { result in
             switch result {
             case .success(let urls):
                 guard let selectedURL = urls.first else { return }
                 
-                // Start accessing security-scoped resource
-                guard selectedURL.startAccessingSecurityScopedResource() else {
-                    viewModel.statusMessage = "Failed to access file"
-                    return
-                }
-                
-                defer {
-                    selectedURL.stopAccessingSecurityScopedResource()
-                }
-                
-                // Process the file
+                // Pass URL to ViewModel - it will handle security-scoped resource access
                 Task {
                     await viewModel.processUploadedFile(fileURL: selectedURL)
                 }

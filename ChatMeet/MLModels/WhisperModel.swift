@@ -84,9 +84,9 @@ class WhisperModel: @unchecked Sendable {
     
     /// Load the Core ML Whisper encoder and decoder models
     private func loadModels() async throws {
-        // Configure Core ML to use CPU and GPU
+        // Configure Core ML to use all available accelerators (CPU, GPU, Neural Engine)
         let config = MLModelConfiguration()
-        config.computeUnits = .cpuAndGPU
+        config.computeUnits = .all
         
         // Load encoder model
         guard let encoderURL = findModelURL(named: encoderModelName) else {

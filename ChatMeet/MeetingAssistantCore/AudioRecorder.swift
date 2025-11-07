@@ -294,9 +294,9 @@ class AudioRecorder: @unchecked Sendable {
         }
     }
     
-    /// Process an uploaded audio file (M4A format)
+    /// Process an uploaded audio file (M4A, WAV, or SPHERE format)
     /// - Parameter fileURL: URL of the uploaded audio file
-    /// - Returns: Audio data in WAV format, or nil if processing failed
+    /// - Returns: Audio data in original format, or nil if processing failed
     public func processUploadedFile(fileURL: URL) async -> Data? {
         // Check file extension
         let fileExtension = fileURL.pathExtension.lowercased()
@@ -304,14 +304,15 @@ class AudioRecorder: @unchecked Sendable {
         if fileExtension == "m4a" {
             // Convert M4A to WAV
             return await convertM4AToWAV(sourceURL: fileURL)
-        } else if fileExtension == "wav" {
-            // Already WAV, just read it
+        } else if fileExtension == "wav" || fileExtension == "sph" {
+            // Read WAV or SPHERE file directly
+            // AudioPreprocessor can handle both formats
             do {
                 let data = try Data(contentsOf: fileURL)
                 lastRecordingURL = fileURL
                 return data
             } catch {
-                print("AudioRecorder: Error reading WAV file: \(error)")
+                print("AudioRecorder: Error reading \(fileExtension.uppercased()) file: \(error)")
                 return nil
             }
         } else {

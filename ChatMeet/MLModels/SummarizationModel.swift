@@ -44,8 +44,8 @@ class SummarizationModel: @unchecked Sendable {
                     return
                 }
                 
-                // Use ModelLoader to load with GPU acceleration
-                self.model = try LanguageModel.loadCompiled(url: modelURL, computeUnits: .cpuAndGPU)
+                // Use ModelLoader to load with all available accelerators (CPU, GPU, Neural Engine)
+                self.model = try LanguageModel.loadCompiled(url: modelURL, computeUnits: .all)
                 print("SummarizationModel: ✓ Successfully loaded Llama 3.2 model")
 
             } catch {

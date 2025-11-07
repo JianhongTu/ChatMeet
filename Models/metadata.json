@@ -1,0 +1,124 @@
+{
+  "model_id": "nvidia/parakeet-tdt-0.6b-v3",
+  "sample_rate": 16000,
+  "max_audio_seconds": 30.0,
+  "max_audio_samples": 480000,
+  "max_symbol_steps": 1,
+  "checkpoint": {
+    "type": "pretrained",
+    "model_id": "nvidia/parakeet-tdt-0.6b-v3"
+  },
+  "coreml": {
+    "compute_units": "CPU_ONLY",
+    "compute_precision": "FLOAT32"
+  },
+  "components": {
+    "preprocessor": {
+      "inputs": {
+        "audio_signal": [
+          1,
+          480000
+        ],
+        "audio_length": [
+          1
+        ]
+      },
+      "outputs": {
+        "mel": [
+          1,
+          128,
+          3001
+        ],
+        "mel_length": [
+          1
+        ]
+      },
+      "path": "ParakeetPreprocessor.mlpackage"
+    },
+    "encoder": {
+      "inputs": {
+        "mel": [
+          1,
+          128,
+          3001
+        ],
+        "mel_length": [
+          1
+        ]
+      },
+      "outputs": {
+        "encoder": [
+          1,
+          1024,
+          376
+        ],
+        "encoder_length": [
+          1
+        ]
+      },
+      "path": "ParakeetEncoder.mlpackage"
+    },
+    "decoder": {
+      "inputs": {
+        "targets": [
+          1,
+          1
+        ],
+        "target_length": [
+          1
+        ],
+        "h_in": [
+          2,
+          1,
+          640
+        ],
+        "c_in": [
+          2,
+          1,
+          640
+        ]
+      },
+      "outputs": {
+        "decoder": [
+          1,
+          640,
+          1
+        ],
+        "h_out": [
+          2,
+          1,
+          640
+        ],
+        "c_out": [
+          2,
+          1,
+          640
+        ]
+      },
+      "path": "ParakeetDecoder.mlpackage"
+    },
+    "joint": {
+      "inputs": {
+        "encoder": [
+          1,
+          1024,
+          376
+        ],
+        "decoder": [
+          1,
+          640,
+          1
+        ]
+      },
+      "outputs": {
+        "logits": [
+          1,
+          376,
+          1,
+          8198
+        ]
+      },
+      "path": "ParakeetJoiner.mlpackage"
+    }
+  }
+}

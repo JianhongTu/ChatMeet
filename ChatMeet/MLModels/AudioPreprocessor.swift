@@ -15,11 +15,12 @@ enum AudioPreprocessingError: Error, LocalizedError {
     case unsupportedChannelCount
     case emptyData
     case parseError
+    case unsupportedSphereEncoding
     
     var errorDescription: String? {
         switch self {
         case .invalidFormat:
-            return "Invalid audio format. Expected WAV file."
+            return "Invalid audio format. Expected WAV or SPHERE file."
         case .unsupportedBitDepth:
             return "Unsupported bit depth. Supported: 16, 24, 32-bit PCM or 32-bit float."
         case .unsupportedChannelCount:
@@ -28,6 +29,8 @@ enum AudioPreprocessingError: Error, LocalizedError {
             return "Audio data is empty."
         case .parseError:
             return "Failed to parse audio file."
+        case .unsupportedSphereEncoding:
+            return "Unsupported SPHERE encoding. Only PCM is supported."
         }
     }
 }
@@ -36,16 +39,28 @@ enum AudioPreprocessingError: Error, LocalizedError {
 /// Converts WAV files to normalized mono Float32 samples at 16kHz
 public class AudioPreprocessor {
     
-    /// Extract normalized PCM samples from WAV file data
-    /// - Parameter audioData: WAV file data
+    /// Extract normalized PCM samples from audio file data (WAV or SPHERE)
+    /// - Parameter audioData: Audio file data (WAV or SPHERE format)
     /// - Returns: Array of normalized float samples (mono, 16kHz, range: -1.0 to 1.0)
     public static func extractPCMSamples(from audioData: Data) throws -> [Float] {
-        // Validate minimum size for WAV header
+        // Validate minimum size
+        guard audioData.count >= 8 else {
+            throw AudioPreprocessingError.emptyData
+        }
+        
+        // Check if it's a SPHERE file (starts with "NIST_1A")
+        let header = audioData.subdata(in: 0..<min(8, audioData.count))
+        if let headerString = String(data: header, encoding: .ascii),
+           headerString.hasPrefix("NIST_1A") {
+            // Parse SPHERE file
+            return try extractPCMFromSphere(audioData)
+        }
+        
+        // Otherwise, parse as WAV file
         guard audioData.count >= 44 else {
             throw AudioPreprocessingError.emptyData
         }
         
-        // Parse WAV file structure
         let wavInfo = try parseWAVHeader(audioData)
         
         // Extract raw PCM data
@@ -71,6 +86,114 @@ public class AudioPreprocessor {
         }
         
         return samples
+    }
+    
+    // MARK: - SPHERE Parsing
+    
+    /// Extract PCM samples from SPHERE/NIST format file
+    private static func extractPCMFromSphere(_ audioData: Data) throws -> [Float] {
+        print("AudioPreprocessor: Parsing SPHERE file, size: \(audioData.count) bytes")
+        
+        // Parse SPHERE header (ASCII text header ending with form feed character)
+        guard let headerEndIndex = audioData.firstIndex(of: 0x0C) else {  // Form feed character
+            print("AudioPreprocessor: SPHERE header end marker (form feed) not found")
+            throw AudioPreprocessingError.parseError
+        }
+        
+        print("AudioPreprocessor: SPHERE header ends at byte \(headerEndIndex)")
+        
+        let headerData = audioData.subdata(in: 0..<headerEndIndex)
+        
+        // Try ASCII first, then fall back to UTF-8 or Latin1
+        var headerString: String?
+        if let ascii = String(data: headerData, encoding: .ascii) {
+            headerString = ascii
+        } else if let utf8 = String(data: headerData, encoding: .utf8) {
+            headerString = utf8
+        } else if let latin1 = String(data: headerData, encoding: .isoLatin1) {
+            headerString = latin1
+        } else {
+            // Last resort: convert non-ASCII bytes to spaces
+            headerString = String(bytes: headerData.map { $0 < 128 ? $0 : 0x20 }, encoding: .ascii)
+        }
+        
+        guard let header = headerString else {
+            print("AudioPreprocessor: Failed to decode SPHERE header")
+            throw AudioPreprocessingError.parseError
+        }
+        
+        print("AudioPreprocessor: SPHERE header (first 500 chars):\n\(String(header.prefix(500)))")
+        
+        // Parse header fields
+        var sampleRate: Int?
+        var channelCount: Int?
+        var sampleNBytes: Int?
+        var sampleCount: Int?
+        var sampleCoding: String?
+        var byteFormat: String = "01"  // Default little-endian
+        
+        for line in header.components(separatedBy: "\n") {
+            let parts = line.components(separatedBy: " ").filter { !$0.isEmpty }
+            guard parts.count >= 3 else { continue }
+            
+            let key = parts[0]
+            let value = parts[2]
+            
+            switch key {
+            case "sample_rate":
+                sampleRate = Int(value)
+            case "channel_count":
+                channelCount = Int(value)
+            case "sample_n_bytes":
+                sampleNBytes = Int(value)
+            case "sample_count":
+                sampleCount = Int(value)
+            case "sample_coding":
+                sampleCoding = value
+            case "sample_byte_format":
+                byteFormat = value
+            default:
+                break
+            }
+        }
+        
+        print("AudioPreprocessor: Parsed SPHERE fields - rate: \(String(describing: sampleRate)), channels: \(String(describing: channelCount)), bytesPerSample: \(String(describing: sampleNBytes)), samples: \(String(describing: sampleCount)), coding: \(String(describing: sampleCoding))")
+        
+        // Validate required fields
+        guard let rate = sampleRate,
+              let channels = channelCount,
+              let bytesPerSample = sampleNBytes,
+              let samples = sampleCount,
+              let coding = sampleCoding else {
+            print("AudioPreprocessor: Missing required SPHERE header fields")
+            throw AudioPreprocessingError.parseError
+        }
+        
+        // Only support PCM encoding
+        guard coding == "pcm" || coding == "PCM" else {
+            throw AudioPreprocessingError.unsupportedSphereEncoding
+        }
+        
+        // Calculate data offset (header + 1024 byte boundary alignment)
+        let dataOffset = ((headerEndIndex + 1) / 1024 + 1) * 1024
+        
+        guard dataOffset < audioData.count else {
+            throw AudioPreprocessingError.parseError
+        }
+        
+        // Extract PCM data
+        let pcmData = audioData.subdata(in: dataOffset..<audioData.count)
+        
+        // Decode based on bytes per sample
+        let bitsPerSample = bytesPerSample * 8
+        var floatSamples = try decodePCM(pcmData, bitsPerSample: bitsPerSample, channels: channels)
+        
+        // Resample to 16kHz if needed
+        if rate != 16000 {
+            floatSamples = resampleTo16kHz(floatSamples, fromRate: Float(rate))
+        }
+        
+        return floatSamples
     }
     
     // MARK: - WAV Parsing
