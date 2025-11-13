@@ -15,9 +15,6 @@ class TranscriptionService: @unchecked Sendable {
     private let coordinator = TranscriptionCoordinator()
     private let streamingCoordinator = StreamingTranscriptionCoordinator()
     
-    // Legacy components (will be removed after migration)
-    private var whisperModel: WhisperModel?  // Keep for backward compatibility during transition
-    
     // Track current model selection
     private var currentModelType: TranscriptionModel?
     private var currentModelService: TranscriptionModelProtocol?
@@ -38,9 +35,6 @@ class TranscriptionService: @unchecked Sendable {
         coordinator.unloadModel()
         streamingCoordinator.stopStreaming()
         
-        // Also unload legacy components
-        whisperModel?.unloadModel()
-        whisperModel = nil
         currentModelService = nil
         isTranscriptionModelReady = false
         

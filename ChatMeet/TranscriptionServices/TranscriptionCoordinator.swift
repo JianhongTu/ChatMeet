@@ -87,34 +87,28 @@ public class TranscriptionCoordinator {
         var processedDuration: TimeInterval = 0
         
         for (index, chunk) in chunks.enumerated() {
-            // Progress callback
-            if let onProgress = onProgress {
-                let progress = TranscriptionProgress(
-                    processedDuration: processedDuration,
-                    totalDuration: audio.duration,
-                    partialText: strategy.mergeTranscriptions(segments),
-                    confidence: nil
-                )
-                onProgress(progress)
-            }
+            print("TranscriptionCoordinator: Starting chunk \(index + 1)/\(chunks.count)")
             
-            // Transcribe chunk
+            // Transcribe chunk with streaming
             var partialText = ""
             let chunkText = try await model.transcribe(chunk) { token in
                 partialText += token
-                // Stream partial tokens through progress callback
+                // Stream tokens for current chunk appended to completed segments
                 if let onProgress = onProgress {
+                    let completedText = strategy.mergeTranscriptions(segments)
+                    let currentProgress = completedText.isEmpty ? partialText : completedText + " " + partialText
+                    
                     let progress = TranscriptionProgress(
                         processedDuration: processedDuration,
                         totalDuration: audio.duration,
-                        partialText: strategy.mergeTranscriptions(segments) + " " + partialText,
+                        partialText: currentProgress,
                         confidence: nil
                     )
                     onProgress(progress)
                 }
             }
             
-            // Create segment
+            // Create segment from final chunk text
             let segment = TranscriptionSegment(
                 text: chunkText,
                 startTime: chunk.startTime,
@@ -125,7 +119,22 @@ public class TranscriptionCoordinator {
             
             processedDuration = chunk.endTime
             
+            // After adding segment, show the merged result (with overlap removed)
+            let mergedText = strategy.mergeTranscriptions(segments)
             print("TranscriptionCoordinator: Chunk \(index + 1)/\(chunks.count) complete")
+            print("  Raw chunk text: '\(chunkText)'")
+            print("  Merged result: '\(mergedText)'")
+            
+            // Send final merged state after each chunk completes
+            if let onProgress = onProgress {
+                let progress = TranscriptionProgress(
+                    processedDuration: processedDuration,
+                    totalDuration: audio.duration,
+                    partialText: mergedText,
+                    confidence: nil
+                )
+                onProgress(progress)
+            }
         }
         
         // Merge segments

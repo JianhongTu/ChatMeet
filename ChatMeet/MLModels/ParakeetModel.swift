@@ -208,11 +208,15 @@ class ParakeetModel: @unchecked Sendable {
             tokenizer: tokenizer
         )
         
+                
         // 5. Decode tokens to text
         let transcription = tokenizer.decode(tokens: tokenIds)
         
         return transcription.trimmingCharacters(in: .whitespacesAndNewlines)
     }
+    
+    // MARK: - Helper Methods
+
     
     /// Transcribe long audio using rolling window strategy
     /// - Parameters:
