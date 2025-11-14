@@ -36,6 +36,7 @@ struct MeetingAssistantContentView: View {
                 // Model selection and status indicators
                 HStack(spacing: 20) {
                     modelPicker
+                    backendPicker
                     Spacer()
                     modelStatusIndicators
                 }
@@ -91,6 +92,7 @@ struct MeetingAssistantContentView: View {
                 // Model selection and status
                 VStack(spacing: 8) {
                     modelPicker
+                    backendPicker
                     modelStatusIndicators
                 }
                 .padding(.horizontal, 20)
@@ -168,6 +170,27 @@ struct MeetingAssistantContentView: View {
             Text(viewModel.selectedModel.description)
                 .font(.system(size: 11))
                 .foregroundColor(.secondary)
+        }
+    }
+    
+    private var backendPicker: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "cpu")
+                .font(.system(size: 16))
+                .foregroundColor(.accentColor)
+            
+            Picker("Compute Backend", selection: $viewModel.selectedBackend) {
+                ForEach(ComputeBackend.allCases, id: \.self) { backend in
+                    Text(backend.description).tag(backend)
+                }
+            }
+            .frame(width: 180)
+            .disabled(viewModel.isRecording || viewModel.isPlaying || viewModel.isLoadingModel)
+            .onChange(of: viewModel.selectedBackend) {
+                Task {
+                    await viewModel.switchBackend(to: viewModel.selectedBackend)
+                }
+            }
         }
     }
     
@@ -378,11 +401,11 @@ struct MeetingAssistantContentView: View {
                 
                 Spacer()
                 
-                // Manual summarization button for streaming mode
-                if viewModel.isStreamingMode && !viewModel.transcription.isEmpty {
+                // Manual summarization button (shown in both modes)
+                if !viewModel.transcription.isEmpty {
                     Button(action: {
                         Task {
-                            await viewModel.manualSummarization()
+                            await viewModel.summarize()
                         }
                     }) {
                         HStack(spacing: 4) {

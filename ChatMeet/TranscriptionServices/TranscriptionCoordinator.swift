@@ -90,13 +90,13 @@ public class TranscriptionCoordinator {
             print("TranscriptionCoordinator: Starting chunk \(index + 1)/\(chunks.count)")
             
             // Transcribe chunk with streaming
-            var partialText = ""
-            let chunkText = try await model.transcribe(chunk) { token in
-                partialText += token
-                // Stream tokens for current chunk appended to completed segments
+            // Note: Callback receives FULL decoded text so far for this chunk, not incremental tokens
+            let chunkText = try await model.transcribe(chunk) { fullChunkText in
+                // fullChunkText is the complete transcription for current chunk so far
+                // Combine with completed segments from previous chunks
                 if let onProgress = onProgress {
                     let completedText = strategy.mergeTranscriptions(segments)
-                    let currentProgress = completedText.isEmpty ? partialText : completedText + " " + partialText
+                    let currentProgress = completedText.isEmpty ? fullChunkText : completedText + " " + fullChunkText
                     
                     let progress = TranscriptionProgress(
                         processedDuration: processedDuration,

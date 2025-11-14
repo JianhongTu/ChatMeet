@@ -73,4 +73,10 @@ public class WhisperModelService: TranscriptionModelProtocol {
             throw TranscriptionModelError.inferenceFailed(error.localizedDescription)
         }
     }
+    
+    /// Set compute backend for the Whisper model
+    /// - Parameter backend: The desired compute backend
+    public func setComputeBackend(_ backend: ComputeBackend) async throws {
+        try await whisperModel.setComputeBackend(backend)
+    }
 }

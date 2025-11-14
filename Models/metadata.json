@@ -58,13 +58,13 @@
       },
       "path": "ParakeetEncoder.mlpackage"
     },
-    "decoder": {
+    "jointerdecoder": {
       "inputs": {
         "targets": [
           1,
           1
         ],
-        "target_length": [
+        "target_lengths": [
           1
         ],
         "h_in": [
@@ -76,12 +76,28 @@
           2,
           1,
           640
+        ],
+        "encoder_step": [
+          1,
+          1024,
+          1
         ]
       },
       "outputs": {
-        "decoder": [
+        "logits": [
           1,
-          640,
+          1,
+          1,
+          8198
+        ],
+        "token_id": [
+          1,
+          1,
+          1
+        ],
+        "duration": [
+          1,
+          1,
           1
         ],
         "h_out": [
@@ -95,30 +111,7 @@
           640
         ]
       },
-      "path": "ParakeetDecoder.mlpackage"
-    },
-    "joint": {
-      "inputs": {
-        "encoder": [
-          1,
-          1024,
-          376
-        ],
-        "decoder": [
-          1,
-          640,
-          1
-        ]
-      },
-      "outputs": {
-        "logits": [
-          1,
-          376,
-          1,
-          8198
-        ]
-      },
-      "path": "ParakeetJoiner.mlpackage"
+      "path": "ParakeetDecoderJointer.mlpackage"
     }
   }
 }

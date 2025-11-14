@@ -63,6 +63,25 @@ class TranscriptionService: @unchecked Sendable {
         print("TranscriptionService: ✅ Switched to \(model.displayName)")
     }
     
+    /// Switch compute backend for the current model
+    /// - Parameter backend: The compute backend to use
+    public func switchBackend(to backend: ComputeBackend) async throws {
+        guard let modelService = currentModelService else {
+            throw TranscriptionError.modelNotLoaded
+        }
+        
+        print("TranscriptionService: 🔄 Switching backend to \(backend.description)...")
+        
+        // Switch backend based on model type
+        if let whisperService = modelService as? WhisperModelService {
+            try await whisperService.setComputeBackend(backend)
+        } else if let parakeetService = modelService as? ParakeetModelService {
+            try await parakeetService.setComputeBackend(backend)
+        }
+        
+        print("TranscriptionService: ✅ Backend switched to \(backend.description)")
+    }
+    
     /// Transcribe audio data to text
     /// - Parameters:
     ///   - audioData: Raw audio data to transcribe (16kHz WAV format)

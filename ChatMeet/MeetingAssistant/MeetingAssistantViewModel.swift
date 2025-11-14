@@ -26,6 +26,7 @@ class MeetingAssistantViewModel: ObservableObject {
     @Published public var isTranscriptionModelReady: Bool = false
     @Published public var isSummarizationModelReady: Bool = false
     @Published public var isLoadingModel: Bool = false
+    @Published public var selectedBackend: ComputeBackend = .all
     
     // Performance statistics
     @Published public var transcriptionTime: TimeInterval = 0
@@ -121,6 +122,35 @@ class MeetingAssistantViewModel: ObservableObject {
         } catch {
             statusMessage = "Failed to load model: \(error.localizedDescription)"
             isTranscriptionModelReady = false
+        }
+        
+        isLoadingModel = false
+    }
+    
+    /// Switch compute backend for the transcription model
+    /// - Parameter backend: The compute backend to use
+    public func switchBackend(to backend: ComputeBackend) async {
+        guard !isRecording && !isLoadingModel else {
+            statusMessage = "Cannot switch backend while recording or loading"
+            return
+        }
+        
+        // Only switch if a model is loaded
+        guard selectedModel != .none else {
+            selectedBackend = backend
+            statusMessage = "Backend set to \(backend.description). Load a model to apply."
+            return
+        }
+        
+        isLoadingModel = true
+        statusMessage = "Switching to \(backend.description) backend..."
+        
+        do {
+            try await transcriptionService.switchBackend(to: backend)
+            selectedBackend = backend
+            statusMessage = "\(selectedModel.displayName) using \(backend.description) - Ready!"
+        } catch {
+            statusMessage = "Failed to switch backend: \(error.localizedDescription)"
         }
         
         isLoadingModel = false
@@ -322,10 +352,12 @@ class MeetingAssistantViewModel: ObservableObject {
                 return
             }
             
-            statusMessage = "Transcription complete. Generating summary..."
+            // Calculate total processing time
+            if let startTime = processingStartTime {
+                totalProcessingTime = Date().timeIntervalSince(startTime)
+            }
             
-            // Automatically summarize the transcription
-            await automaticSummarization()
+            statusMessage = "Transcription complete. Click 'Summarize' to generate summary."
             
         } catch {
             // Show error in status, keep any partial results
@@ -338,10 +370,11 @@ class MeetingAssistantViewModel: ObservableObject {
         }
     }
     
-    /// Automatically summarize using agentic workflow
-    private func automaticSummarization() async {
+    /// Manually trigger summarization (used in both streaming and batch modes)
+    public func summarize() async {
         // Check if there's text to summarize
         guard !transcription.isEmpty else {
+            statusMessage = "No transcript available to summarize"
             return
         }
         
@@ -351,7 +384,7 @@ class MeetingAssistantViewModel: ObservableObject {
         tokenCount = 0
         
         // Use agentic workflow to update summary
-        statusMessage = "Analyzing transcript and updating summary..."
+        statusMessage = "Generating summary..."
         summarizationStartTime = Date()
         do {
             let bulletPoints = try await summaryService.updateSummary(with: transcription) { [weak self] partialActions in
@@ -394,68 +427,6 @@ class MeetingAssistantViewModel: ObservableObject {
             // Update bullet points
             summaryBulletPoints = bulletPoints
             statusMessage = String(format: "Complete! %d bullet points (%.1fs, %.1f tok/s)", bulletPoints.count, totalProcessingTime, tokensPerSecond)
-        } catch {
-            statusMessage = "Error generating summary: \(error.localizedDescription)"
-            if summaryBulletPoints.isEmpty {
-                summaryActionLog = "Failed to generate summary. Please try again."
-            }
-        }
-        
-        isSummarizing = false
-    }
-    
-    /// Manually trigger summarization in streaming mode
-    public func manualSummarization() async {
-        // Check if there's text to summarize
-        guard !streamingBuffer.isEmpty else {
-            statusMessage = "No transcript available to summarize"
-            return
-        }
-        
-        isSummarizing = true
-        summaryActionLog = ""
-        firstTokenTime = nil
-        tokenCount = 0
-        
-        // Use agentic workflow to update summary with streaming buffer
-        statusMessage = "Generating summary..."
-        summarizationStartTime = Date()
-        do {
-            let bulletPoints = try await summaryService.updateSummary(with: streamingBuffer) { [weak self] partialActions in
-                // Show LLM decision-making in real-time
-                Task { @MainActor in
-                    guard let self = self else { return }
-                    
-                    // Track time to first token
-                    if self.firstTokenTime == nil && !partialActions.isEmpty {
-                        self.firstTokenTime = Date()
-                        if let startTime = self.summarizationStartTime {
-                            self.timeToFirstToken = Date().timeIntervalSince(startTime)
-                        }
-                    }
-                    
-                    // Estimate token count
-                    let wordCount = partialActions.split(separator: " ").count
-                    self.tokenCount = Int(Double(wordCount) / 0.75)
-                    
-                    // Show action log
-                    self.summaryActionLog = partialActions
-                }
-            }
-            
-            // Calculate summarization time
-            if let startTime = summarizationStartTime {
-                summarizationTime = Date().timeIntervalSince(startTime)
-            }
-            
-            // Calculate tokens per second
-            if summarizationTime > 0 {
-                tokensPerSecond = Double(tokenCount) / summarizationTime
-            }
-            
-            // Update bullet points
-            summaryBulletPoints = bulletPoints
-            statusMessage = String(format: "Summary updated! %d bullet points (%.1fs, %.1f tok/s)", bulletPoints.count, summarizationTime, tokensPerSecond)
         } catch {
             statusMessage = "Error generating summary: \(error.localizedDescription)"
             if summaryBulletPoints.isEmpty {

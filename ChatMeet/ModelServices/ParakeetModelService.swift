@@ -20,9 +20,9 @@ public class ParakeetModelService: TranscriptionModelProtocol {
     }
     
     public let capabilities = ModelCapabilities(
-        supportsStreaming: false,  // RNN-T doesn't support KV cache streaming
-        supportsKVCache: false,
-        optimalChunkSize: 20.0,    // Works well with 20s chunks
+        supportsStreaming: true,   // Parakeet supports token-by-token streaming during decoding
+        supportsKVCache: false,     // RNN-T uses LSTM states instead of KV cache
+        optimalChunkSize: 30.0,     // Works well with 30s chunks
         requiresFixedLength: true,  // Requires 30s padded input
         recommendedOverlap: 2.0
     )
@@ -66,18 +66,18 @@ public class ParakeetModelService: TranscriptionModelProtocol {
         )
         
         // Transcribe using the existing Parakeet implementation
-        // Note: Parakeet doesn't support token-by-token streaming
+        // Pass onTokenGenerated callback for real-time streaming
         do {
-            let text = try await parakeetModel.transcribe(wavData, onProgress: nil)
-            
-            // Call progress callback with final result if provided
-            if let onTokenGenerated = onTokenGenerated {
-                onTokenGenerated(text)
-            }
-            
+            let text = try await parakeetModel.transcribe(wavData, onProgress: onTokenGenerated)
             return text
         } catch {
             throw TranscriptionModelError.inferenceFailed(error.localizedDescription)
         }
+    }
+    
+    /// Set compute backend for the Parakeet model
+    /// - Parameter backend: The desired compute backend
+    public func setComputeBackend(_ backend: ComputeBackend) async throws {
+        try await parakeetModel.setComputeBackend(backend)
     }
 }

@@ -12,7 +12,7 @@ import AVFoundation
 class StreamingAudioProcessor: NSObject, @unchecked Sendable {
     
     // Configuration
-    private let chunkDuration: TimeInterval = 5.0  // 5 second chunks
+    private let chunkDuration: TimeInterval  // Configurable chunk duration
     private let sampleRate: Double = 16000.0
     private let channelCount: Int = 1
     
@@ -33,7 +33,8 @@ class StreamingAudioProcessor: NSObject, @unchecked Sendable {
     private var isRecording = false
     private var processingQueue = DispatchQueue(label: "com.chatmeet.audioprocessing", qos: .userInitiated)
     
-    override init() {
+    init(chunkDuration: TimeInterval = 5.0) {
+        self.chunkDuration = chunkDuration
         // Calculate buffer size for 30 seconds (matching Whisper's input length)
         self.maxBufferSize = Int(30.0 * sampleRate)
         self.audioRingBuffer = [Float](repeating: 0, count: maxBufferSize)
@@ -41,7 +42,7 @@ class StreamingAudioProcessor: NSObject, @unchecked Sendable {
     }
     
     /// Start streaming audio processing
-    /// - Parameter onChunk: Callback invoked with each 5-second audio chunk
+    /// - Parameter onChunk: Callback invoked with audio chunks at configured interval
     public func startStreaming(onChunk: @escaping @Sendable (Data) -> Void) throws {
         guard !isRecording else { return }
         
@@ -159,13 +160,14 @@ class StreamingAudioProcessor: NSObject, @unchecked Sendable {
         
         // Read from ring buffer accounting for wraparound
         if totalSamplesWritten < maxBufferSize {
-            // Buffer hasn't wrapped yet, just copy from beginning
-            samples = Array(audioRingBuffer.prefix(windowSize))
+            // Buffer hasn't wrapped yet, just copy what we've written so far
+            // The write position indicates how many samples we have
+            samples = Array(audioRingBuffer.prefix(bufferWritePosition))
         } else {
             // Buffer has wrapped, need to reconstruct order
-            let readPosition = bufferWritePosition
+            // The oldest sample is at bufferWritePosition, and we go forward
             for i in 0..<windowSize {
-                let ringIndex = (readPosition + i) % maxBufferSize
+                let ringIndex = (bufferWritePosition + i) % maxBufferSize
                 samples[i] = audioRingBuffer[ringIndex]
             }
         }

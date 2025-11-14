@@ -59,8 +59,9 @@ public class StreamingTranscriptionCoordinator {
         print("StreamingTranscriptionCoordinator: ✅ Starting streaming with \(model.modelName)")
         
         // Start audio source with chunk processing
+        // Use Task.detached to ensure transcription runs on background thread, not main thread
         try audioSource.start { [weak self] chunk in
-            Task {
+            Task.detached {
                 await self?.processChunk(chunk)
             }
         }
@@ -103,17 +104,16 @@ public class StreamingTranscriptionCoordinator {
             // For streaming, we need to use the model's streaming capabilities
             // This requires access to the underlying WhisperModel's transcribeIncremental method
             // For now, we'll use the standard transcribe method with streaming callback
+            // Note: Models send FULL decoded text so far, not incremental tokens
             
-            var partialText = ""
-            let newText = try await model.transcribe(chunk) { token in
-                partialText += token
-                
-                // Stream incremental updates
+            let newText = try await model.transcribe(chunk) { fullText in
+                // fullText is the complete transcription so far for this chunk
+                // Combine with cumulative text from previous chunks
                 var streamedText = baseText
-                if needsSpace && !streamedText.isEmpty {
+                if needsSpace && !streamedText.isEmpty && !fullText.isEmpty {
                     streamedText += " "
                 }
-                streamedText += partialText
+                streamedText += fullText
                 
                 Task { @MainActor in
                     self.onUpdate?(streamedText)

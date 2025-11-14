@@ -57,14 +57,38 @@ class WhisperModel: @unchecked Sendable {
     // Model readiness state
     private(set) var isReady: Bool = false
     
+    // Compute backend configuration
+    private var currentBackend: ComputeBackend = .all
+    
     public init() {
         // Models will be loaded lazily via loadModel()
+    }
+    
+    /// Get the current compute backend
+    public var computeBackend: ComputeBackend {
+        return currentBackend
+    }
+    
+    /// Set the compute backend for model inference
+    /// - Parameter backend: The desired compute backend
+    /// - Note: Models will be reloaded automatically if already loaded
+    public func setComputeBackend(_ backend: ComputeBackend) async throws {
+        print("WhisperModel: 🔄 Switching compute backend to \(backend.description)")
+        
+        // Store the new backend
+        currentBackend = backend
+        
+        // If models are already loaded, reload them with new configuration
+        if isReady {
+            unloadModel()
+            try await loadModel()
+        }
     }
     
     /// Load the Core ML Whisper encoder and decoder models
     /// This should be called after user selects the Whisper model
     public func loadModel() async throws {
-        print("WhisperModel: 🔄 Starting model loading...")
+        print("WhisperModel: 🔄 Starting model loading with \(currentBackend.description) backend...")
         
         try await loadModels()
         try await loadTokenizer()
@@ -84,9 +108,9 @@ class WhisperModel: @unchecked Sendable {
     
     /// Load the Core ML Whisper encoder and decoder models
     private func loadModels() async throws {
-        // Configure Core ML to use all available accelerators (CPU, GPU, Neural Engine)
+        // Configure Core ML with selected compute backend
         let config = MLModelConfiguration()
-        config.computeUnits = .all
+        config.computeUnits = currentBackend.mlComputeUnits
         
         // Load encoder model
         guard let encoderURL = findModelURL(named: encoderModelName) else {
@@ -363,7 +387,11 @@ class WhisperModel: @unchecked Sendable {
             // Stream partial transcription if callback is provided
             if let onProgress = onProgress {
                 let partialTranscription = decodeTokens(generatedTokens, using: tokenizer)
-                onProgress(partialTranscription)
+                
+                // Dispatch to main thread asynchronously to avoid blocking decoding
+                Task { @MainActor in
+                    onProgress(partialTranscription)
+                }
             }
         }
         
@@ -463,7 +491,11 @@ class WhisperModel: @unchecked Sendable {
             // Stream if callback provided (show cumulative transcription)
             if let onProgress = onProgress {
                 let cumulativeTranscription = decodeTokens(newTokens, using: tokenizer, skipPrompt: false)
-                onProgress(cumulativeTranscription)
+                
+                // Dispatch to main thread asynchronously to avoid blocking decoding
+                Task { @MainActor in
+                    onProgress(cumulativeTranscription)
+                }
             }
         }
         
