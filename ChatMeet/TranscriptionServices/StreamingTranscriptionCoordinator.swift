@@ -97,39 +97,27 @@ public class StreamingTranscriptionCoordinator {
         guard let model = model, let context = context else { return }
         
         do {
-            // Track base text before this chunk
-            let baseText = cumulativeText
-            let needsSpace = !baseText.isEmpty
+            // WORKAROUND: Ignore progress callbacks during transcription to avoid duplication issues
+            // Instead, we'll only update UI with the final deduplicated cumulative text after each chunk
             
-            // For streaming, we need to use the model's streaming capabilities
-            // This requires access to the underlying WhisperModel's transcribeIncremental method
-            // For now, we'll use the standard transcribe method with streaming callback
-            // Note: Models send FULL decoded text so far, not incremental tokens
-            
-            let newText = try await model.transcribe(chunk) { fullText in
-                // fullText is the complete transcription so far for this chunk
-                // Combine with cumulative text from previous chunks
-                var streamedText = baseText
-                if needsSpace && !streamedText.isEmpty && !fullText.isEmpty {
-                    streamedText += " "
-                }
-                streamedText += fullText
-                
-                Task { @MainActor in
-                    self.onUpdate?(streamedText)
-                }
+            let newText = try await model.transcribe(chunk) { chunkProgressText in
+                // Ignore progress updates - we'll send the clean cumulative text after chunk completes
             }
             
-            // Update cumulative text with new content
-            if !newText.isEmpty {
+            // Deduplicate overlapping content between chunks
+            print("StreamingTranscriptionCoordinator: 🔍 Chunk complete. newText: '\(newText)'")
+            let deduplicatedText = deduplicateWithPrevious(newText: newText, previousText: cumulativeText)
+            
+            // Update cumulative text with deduplicated content from this chunk
+            if !deduplicatedText.isEmpty {
                 if !cumulativeText.isEmpty {
                     cumulativeText += " "
                 }
-                cumulativeText += newText
+                cumulativeText += deduplicatedText
                 
-                print("StreamingTranscriptionCoordinator: 🟢 Chunk produced \(newText.count) chars")
+                print("StreamingTranscriptionCoordinator: 🟢 Cumulative text (\(cumulativeText.count) chars): '\(cumulativeText)'")
                 
-                // Final update for this chunk
+                // Send the clean, deduplicated cumulative text to UI
                 Task { @MainActor in
                     self.onUpdate?(self.cumulativeText)
                 }
@@ -138,6 +126,59 @@ public class StreamingTranscriptionCoordinator {
         } catch {
             print("StreamingTranscriptionCoordinator: ❌ Chunk processing failed: \(error)")
         }
+    }
+    
+    /// Deduplicate new text by removing overlapping words from the beginning
+    /// - Parameters:
+    ///   - newText: New transcription from current chunk
+    ///   - previousText: Cumulative text from previous chunks
+    /// - Returns: Deduplicated new text with overlap removed
+    private func deduplicateWithPrevious(newText: String, previousText: String) -> String {
+        guard !previousText.isEmpty && !newText.isEmpty else { return newText }
+        
+        // Split into words
+        let previousWords = previousText.split(separator: " ").map(String.init)
+        let newWords = newText.split(separator: " ").map(String.init)
+        
+        guard !previousWords.isEmpty && !newWords.isEmpty else { return newText }
+        
+        // Normalize for comparison (lowercase, remove punctuation)
+        func normalize(_ word: String) -> String {
+            return word.lowercased().filter { $0.isLetter || $0.isNumber }
+        }
+        
+        // Find the longest matching suffix of previousWords with prefix of newWords
+        var maxOverlap = 0
+        let searchWindow = min(20, previousWords.count) // Only check last 20 words
+        let startIndex = max(0, previousWords.count - searchWindow)
+        
+        for i in startIndex..<previousWords.count {
+            let suffixWords = previousWords[i...]
+            let maxMatch = min(suffixWords.count, newWords.count)
+            
+            var matchCount = 0
+            for j in 0..<maxMatch {
+                if normalize(suffixWords[suffixWords.startIndex + j]) == normalize(newWords[j]) {
+                    matchCount += 1
+                } else {
+                    break
+                }
+            }
+            
+            if matchCount > maxOverlap {
+                maxOverlap = matchCount
+            }
+        }
+        
+        // Remove overlapping words from the beginning of new text
+        if maxOverlap > 0 {
+            let deduplicatedWords = newWords.dropFirst(maxOverlap)
+            let result = deduplicatedWords.joined(separator: " ")
+            print("StreamingTranscriptionCoordinator: 🔍 Removed \(maxOverlap) overlapping words")
+            return result
+        }
+        
+        return newText
     }
 }
 

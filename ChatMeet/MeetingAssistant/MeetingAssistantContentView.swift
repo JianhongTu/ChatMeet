@@ -12,6 +12,7 @@ struct MeetingAssistantContentView: View {
     @StateObject private var viewModel = MeetingAssistantViewModel()
     @State private var isFilePickerPresented = false
     @State private var isAPISettingsPresented = false
+    @State private var isPerformanceStatsPresented = false
     
     init() {}
     
@@ -27,12 +28,8 @@ struct MeetingAssistantContentView: View {
     
     private var macOSLayout: some View {
         VStack(spacing: 0) {
-            // Header section with title and recording button
+            // Header section with controls
             VStack(spacing: 16) {
-                Text("Meeting Assistant")
-                    .font(.system(size: 28, weight: .semibold))
-                    .foregroundColor(.primary)
-                
                 // Model selection and status indicators
                 HStack(spacing: 20) {
                     modelPicker
@@ -42,15 +39,17 @@ struct MeetingAssistantContentView: View {
                 }
                 .padding(.horizontal, 20)
                 
-                streamingModeToggle
-                
-                summarizationProviderToggle
+                HStack(spacing: 30) {
+                    streamingModeToggle
+                    summarizationProviderToggle
+                }
                 
                 HStack(spacing: 12) {
                     recordButton
                     playbackButton
                     uploadButton
                     apiSettingsButton
+                    performanceStatsButton
                 }
                 
                 statusMessage
@@ -59,13 +58,6 @@ struct MeetingAssistantContentView: View {
             .padding(.horizontal, 20)
             
             Divider()
-            
-            // Statistics panel
-            if viewModel.totalProcessingTime > 0 {
-                statisticsPanel
-                    .padding(.bottom, 8)
-                Divider()
-            }
             
             // Content area with transcription and summary text boxes side by side
             HStack(spacing: 0) {
@@ -83,12 +75,8 @@ struct MeetingAssistantContentView: View {
     
     private var iOSLayout: some View {
         VStack(spacing: 0) {
-            // Header section with title and buttons stacked vertically
+            // Header section with controls
             VStack(spacing: 12) {
-                Text("Meeting Assistant")
-                    .font(.system(size: 24, weight: .semibold))
-                    .foregroundColor(.primary)
-                
                 // Model selection and status
                 VStack(spacing: 8) {
                     modelPicker
@@ -97,15 +85,13 @@ struct MeetingAssistantContentView: View {
                 }
                 .padding(.horizontal, 20)
                 
-                // Streaming mode toggle
-                streamingModeToggle
-                    .padding(.horizontal, 20)
-                    .padding(.bottom, 8)
-                
-                // Summarization provider toggle
-                summarizationProviderToggle
-                    .padding(.horizontal, 20)
-                    .padding(.bottom, 8)
+                // Toggles
+                VStack(spacing: 8) {
+                    streamingModeToggle
+                    summarizationProviderToggle
+                }
+                .padding(.horizontal, 20)
+                .padding(.bottom, 8)
                 
                 // Buttons stacked vertically
                 VStack(spacing: 10) {
@@ -113,6 +99,7 @@ struct MeetingAssistantContentView: View {
                     playbackButton
                     uploadButton
                     apiSettingsButton
+                    performanceStatsButton
                 }
                 .padding(.horizontal, 20)
                 
@@ -121,14 +108,6 @@ struct MeetingAssistantContentView: View {
             .padding(.vertical, 16)
             
             Divider()
-            
-            // Statistics panel
-            if viewModel.totalProcessingTime > 0 {
-                statisticsPanel
-                    .padding(.horizontal, 20)
-                    .padding(.vertical, 12)
-                Divider()
-            }
             
             // Content area with transcription and summary text boxes stacked vertically
             VStack(spacing: 0) {
@@ -154,7 +133,7 @@ struct MeetingAssistantContentView: View {
                     Text(model.displayName).tag(model)
                 }
             }
-            .frame(width: 200)
+            .frame(width: 250)
             .disabled(viewModel.isRecording || viewModel.isPlaying || viewModel.isLoadingModel)
             .onChange(of: viewModel.selectedModel) {
                 Task {
@@ -162,14 +141,10 @@ struct MeetingAssistantContentView: View {
                 }
             }
             
-            if viewModel.isLoadingModel {
-                ProgressView()
-                    .scaleEffect(0.7)
-            }
-            
-            Text(viewModel.selectedModel.description)
-                .font(.system(size: 11))
-                .foregroundColor(.secondary)
+            // Always reserve space for the progress indicator to prevent layout shifts
+            ProgressView()
+                .scaleEffect(0.7)
+                .opacity(viewModel.isLoadingModel ? 1.0 : 0.0)
         }
     }
     
@@ -184,7 +159,7 @@ struct MeetingAssistantContentView: View {
                     Text(backend.description).tag(backend)
                 }
             }
-            .frame(width: 180)
+            .frame(width: 220)
             .disabled(viewModel.isRecording || viewModel.isPlaying || viewModel.isLoadingModel)
             .onChange(of: viewModel.selectedBackend) {
                 Task {
@@ -221,7 +196,7 @@ struct MeetingAssistantContentView: View {
             HStack(spacing: 6) {
                 Image(systemName: "waveform.circle.fill")
                     .font(.system(size: 14))
-                Text("Real-time Streaming Mode")
+                Text("Streaming")
                     .font(.system(size: 13))
             }
         }
@@ -236,7 +211,7 @@ struct MeetingAssistantContentView: View {
             HStack(spacing: 6) {
                 Image(systemName: viewModel.useOnlineSummarization ? "cloud.fill" : "cpu")
                     .font(.system(size: 14))
-                Text(viewModel.useOnlineSummarization ? "Online API Summarization" : "On-Device Summarization")
+                Text("API LM")
                     .font(.system(size: 13))
             }
         }
@@ -272,6 +247,42 @@ struct MeetingAssistantContentView: View {
         .buttonStyle(.plain)
         .sheet(isPresented: $isAPISettingsPresented) {
             APISettingsView()
+        }
+    }
+    
+    private var performanceStatsButton: some View {
+        Button(action: {
+            isPerformanceStatsPresented = true
+        }) {
+            HStack(spacing: 8) {
+                Image(systemName: "chart.bar.fill")
+                    .font(.system(size: 16))
+                Text("Performance")
+                    .font(.system(size: 14, weight: .medium))
+            }
+            #if os(macOS)
+            .frame(width: 140, height: 44)
+            #else
+            .frame(maxWidth: .infinity)
+            .frame(height: 50)
+            #endif
+            .background(Color.blue.opacity(0.15))
+            .foregroundColor(.blue)
+            .cornerRadius(8)
+        }
+        .buttonStyle(.plain)
+        .disabled(viewModel.totalProcessingTime <= 0)
+        .opacity(viewModel.totalProcessingTime > 0 ? 1.0 : 0.5)
+        .sheet(isPresented: $isPerformanceStatsPresented) {
+            PerformanceStatsView(
+                recordingDuration: viewModel.recordingDuration,
+                transcriptionTime: viewModel.transcriptionTime,
+                timeToFirstToken: viewModel.timeToFirstToken,
+                summarizationTime: viewModel.summarizationTime,
+                tokensPerSecond: viewModel.tokensPerSecond,
+                realTimeFactor: viewModel.realTimeFactor,
+                totalProcessingTime: viewModel.totalProcessingTime
+            )
         }
     }
     
@@ -509,80 +520,7 @@ struct MeetingAssistantContentView: View {
         return formatter.string(from: date)
     }
     
-    // MARK: - Statistics Panel
-    
-    private var statisticsPanel: some View {
-        VStack(spacing: 8) {
-            Text("Performance Statistics")
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundColor(.secondary)
-            
-            #if os(macOS)
-            HStack(spacing: 20) {
-                statisticItem(label: "Recording", value: formatTime(viewModel.recordingDuration))
-                Divider().frame(height: 30)
-                statisticItem(label: "Transcription", value: formatTime(viewModel.transcriptionTime))
-                Divider().frame(height: 30)
-                statisticItem(label: "Time to First Token", value: formatTime(viewModel.timeToFirstToken))
-                Divider().frame(height: 30)
-                statisticItem(label: "Summarization", value: formatTime(viewModel.summarizationTime))
-                Divider().frame(height: 30)
-                statisticItem(label: "Tokens/Sec", value: String(format: "%.1f", viewModel.tokensPerSecond))
-                Divider().frame(height: 30)
-                statisticItem(label: "Total", value: formatTime(viewModel.totalProcessingTime), highlight: true)
-            }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 8)
-            .background(Color.secondary.opacity(0.1))
-            .cornerRadius(8)
-            #else
-            VStack(spacing: 6) {
-                HStack {
-                    statisticItem(label: "Recording", value: formatTime(viewModel.recordingDuration))
-                    Spacer()
-                    statisticItem(label: "Transcription", value: formatTime(viewModel.transcriptionTime))
-                }
-                HStack {
-                    statisticItem(label: "First Token", value: formatTime(viewModel.timeToFirstToken))
-                    Spacer()
-                    statisticItem(label: "Summarization", value: formatTime(viewModel.summarizationTime))
-                }
-                HStack {
-                    statisticItem(label: "Tok/Sec", value: String(format: "%.1f", viewModel.tokensPerSecond))
-                    Spacer()
-                    statisticItem(label: "Total Processing", value: formatTime(viewModel.totalProcessingTime), highlight: true)
-                }
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-            .background(Color.secondary.opacity(0.1))
-            .cornerRadius(8)
-            #endif
-        }
-    }
-    
-    private func statisticItem(label: String, value: String, highlight: Bool = false) -> some View {
-        VStack(spacing: 4) {
-            Text(label)
-                .font(.system(size: 10))
-                .foregroundColor(.secondary)
-            Text(value)
-                .font(.system(size: highlight ? 16 : 14, weight: highlight ? .bold : .medium))
-                .foregroundColor(highlight ? .blue : .primary)
-        }
-    }
-    
-    private func formatTime(_ time: TimeInterval) -> String {
-        if time < 1.0 {
-            return String(format: "%.0fms", time * 1000)
-        } else if time < 60.0 {
-            return String(format: "%.1fs", time)
-        } else {
-            let minutes = Int(time) / 60
-            let seconds = Int(time) % 60
-            return String(format: "%d:%02d", minutes, seconds)
-        }
-    }
+    // MARK: - File Importer
 }
 
 // MARK: - File Importer ViewModifier

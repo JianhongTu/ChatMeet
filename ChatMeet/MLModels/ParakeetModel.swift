@@ -127,7 +127,10 @@ class ParakeetModel: @unchecked Sendable {
             throw ParakeetError.modelNotFound(preprocessorModelName)
         }
         
-        preprocessorModel = try MLModel(contentsOf: modelURL, configuration: config)
+        // Load on background thread to prevent UI freeze
+        preprocessorModel = try await Task.detached(priority: .userInitiated) {
+            try MLModel(contentsOf: modelURL, configuration: config)
+        }.value
         print("ParakeetModel: ✓ Loaded preprocessor model")
     }
     
@@ -137,7 +140,10 @@ class ParakeetModel: @unchecked Sendable {
             throw ParakeetError.modelNotFound(encoderModelName)
         }
         
-        encoderModel = try MLModel(contentsOf: modelURL, configuration: config)
+        // Load on background thread to prevent UI freeze
+        encoderModel = try await Task.detached(priority: .userInitiated) {
+            try MLModel(contentsOf: modelURL, configuration: config)
+        }.value
         print("ParakeetModel: ✓ Loaded encoder model")
     }
     
@@ -147,7 +153,10 @@ class ParakeetModel: @unchecked Sendable {
             throw ParakeetError.modelNotFound(decoderJoinerModelName)
         }
         
-        decoderJoinerModel = try MLModel(contentsOf: modelURL, configuration: config)
+        // Load on background thread to prevent UI freeze
+        decoderJoinerModel = try await Task.detached(priority: .userInitiated) {
+            try MLModel(contentsOf: modelURL, configuration: config)
+        }.value
         print("ParakeetModel: ✓ Loaded decoder+joiner model")
     }
     

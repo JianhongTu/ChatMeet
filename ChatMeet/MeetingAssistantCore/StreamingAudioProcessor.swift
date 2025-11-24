@@ -12,7 +12,7 @@ import AVFoundation
 class StreamingAudioProcessor: NSObject, @unchecked Sendable {
     
     // Configuration
-    private let chunkDuration: TimeInterval  // Configurable chunk duration
+    private let chunkDuration: TimeInterval = 5.0  // 5 second chunks
     private let sampleRate: Double = 16000.0
     private let channelCount: Int = 1
     
@@ -33,8 +33,7 @@ class StreamingAudioProcessor: NSObject, @unchecked Sendable {
     private var isRecording = false
     private var processingQueue = DispatchQueue(label: "com.chatmeet.audioprocessing", qos: .userInitiated)
     
-    init(chunkDuration: TimeInterval = 5.0) {
-        self.chunkDuration = chunkDuration
+    override init() {
         // Calculate buffer size for 30 seconds (matching Whisper's input length)
         self.maxBufferSize = Int(30.0 * sampleRate)
         self.audioRingBuffer = [Float](repeating: 0, count: maxBufferSize)
@@ -42,7 +41,7 @@ class StreamingAudioProcessor: NSObject, @unchecked Sendable {
     }
     
     /// Start streaming audio processing
-    /// - Parameter onChunk: Callback invoked with audio chunks at configured interval
+    /// - Parameter onChunk: Callback invoked with each 5-second audio chunk
     public func startStreaming(onChunk: @escaping @Sendable (Data) -> Void) throws {
         guard !isRecording else { return }
         

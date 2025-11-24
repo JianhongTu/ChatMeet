@@ -35,6 +35,7 @@ struct APISettingsView: View {
                 Text("Configure your API key to use online summarization. The key is stored securely in your device's Keychain.")
                     .font(.caption)
                     .foregroundColor(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             
             Section(header: Text("API Configuration")) {
@@ -51,6 +52,8 @@ struct APISettingsView: View {
                     .autocapitalization(.none)
                     #endif
                     .autocorrectionDisabled()
+                    .lineLimit(1)
+                    .truncationMode(.middle)
                 
                 TextField("Model Name", text: $modelName)
                     #if os(iOS)
@@ -89,6 +92,7 @@ struct APISettingsView: View {
                     Text(testResult)
                         .font(.caption)
                         .foregroundColor(testResult.contains("✅") ? .green : .red)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
                 
                 if APIKeyManager.shared.hasAPIKey() {
@@ -109,9 +113,13 @@ struct APISettingsView: View {
                         .fontWeight(.semibold)
                     
                     Text("1. Contact your API provider")
+                        .fixedSize(horizontal: false, vertical: true)
                     Text("2. Obtain an API key")
+                        .fixedSize(horizontal: false, vertical: true)
                     Text("3. Copy and paste it above")
+                        .fixedSize(horizontal: false, vertical: true)
                     Text("4. Configure the endpoint URL if different")
+                        .fixedSize(horizontal: false, vertical: true)
                     
                     Text("\nCommon Issues:")
                         .font(.subheadline)
@@ -119,17 +127,23 @@ struct APISettingsView: View {
                         .padding(.top, 8)
                     
                     Text("• HTTP 403: Invalid API key or insufficient permissions")
+                        .fixedSize(horizontal: false, vertical: true)
                     Text("• Check that your API key is active and has access")
+                        .fixedSize(horizontal: false, vertical: true)
                     Text("• Verify the endpoint URL is correct")
+                        .fixedSize(horizontal: false, vertical: true)
                     
                     Text("\nYour API key is stored securely in your device's Keychain and never leaves your device.")
                         .font(.caption)
                         .foregroundColor(.secondary)
                         .padding(.top, 4)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
                 .font(.caption)
             }
         }
+        .formStyle(.grouped)
+        .padding(.horizontal, 20)
         .navigationTitle("API Settings")
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)

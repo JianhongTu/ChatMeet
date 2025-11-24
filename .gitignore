@@ -4,3 +4,6 @@
 # Xcode user-specific files
 *.xcuserstate
 xcuserdata/
+
+# Secret configuration files
+Config/Secrets.xcconfig

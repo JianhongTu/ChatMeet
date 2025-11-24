@@ -1,0 +1,8 @@
+// Config.xcconfig
+// Main configuration file that includes secrets
+
+// Include the secrets file (will be ignored by git)
+#include "Secrets.xcconfig"
+
+// Make the HF_TOKEN available to the app as a preprocessor macro
+// This will be accessible in Info.plist and can be read at runtime

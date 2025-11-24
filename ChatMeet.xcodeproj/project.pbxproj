@@ -7,28 +7,30 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		F41F01E82ED50FA300662A47 /* WhisperDecoder_whisper-tiny.mlpackage in Sources */ = {isa = PBXBuildFile; fileRef = F41F01E72ED50FA300662A47 /* WhisperDecoder_whisper-tiny.mlpackage */; };
+		F41F01EC2ED50FAF00662A47 /* ParakeetDecoderJointer.mlpackage in Sources */ = {isa = PBXBuildFile; fileRef = F41F01E92ED50FAF00662A47 /* ParakeetDecoderJointer.mlpackage */; };
+		F41F01ED2ED50FAF00662A47 /* ParakeetPreprocessor.mlpackage in Sources */ = {isa = PBXBuildFile; fileRef = F41F01EB2ED50FAF00662A47 /* ParakeetPreprocessor.mlpackage */; };
+		F41F01EE2ED50FAF00662A47 /* ParakeetEncoder.mlpackage in Sources */ = {isa = PBXBuildFile; fileRef = F41F01EA2ED50FAF00662A47 /* ParakeetEncoder.mlpackage */; };
+		F41F01F22ED5140100662A47 /* Secrets.xcconfig in Resources */ = {isa = PBXBuildFile; fileRef = F41F01F12ED5140100662A47 /* Secrets.xcconfig */; };
 		F443251E2EBD62E800B89542 /* StatefulLlama3.2Instruct.mlpackage in Sources */ = {isa = PBXBuildFile; fileRef = F443251A2EBD62E800B89542 /* StatefulLlama3.2Instruct.mlpackage */; };
 		F443251F2EBD62E800B89542 /* WhisperEncoder_whisper-tiny.mlpackage in Sources */ = {isa = PBXBuildFile; fileRef = F443251C2EBD62E800B89542 /* WhisperEncoder_whisper-tiny.mlpackage */; };
-		F44325212EBD62E800B89542 /* WhisperDecoder_whisper-tiny.mlpackage in Sources */ = {isa = PBXBuildFile; fileRef = F443251B2EBD62E800B89542 /* WhisperDecoder_whisper-tiny.mlpackage */; };
 		F44325242EBD62E800B89542 /* README.md in Resources */ = {isa = PBXBuildFile; fileRef = F44325192EBD62E800B89542 /* README.md */; };
 		F44B061B2EAB53E2009EBECA /* Hub in Frameworks */ = {isa = PBXBuildFile; productRef = F44B061A2EAB53E2009EBECA /* Hub */; };
 		F44B061D2EAB53E2009EBECA /* Tokenizers in Frameworks */ = {isa = PBXBuildFile; productRef = F44B061C2EAB53E2009EBECA /* Tokenizers */; };
 		F44B061F2EAB53E2009EBECA /* Transformers in Frameworks */ = {isa = PBXBuildFile; productRef = F44B061E2EAB53E2009EBECA /* Transformers */; };
 		F44B06222EAB53FA009EBECA /* Path in Frameworks */ = {isa = PBXBuildFile; productRef = F44B06212EAB53FA009EBECA /* Path */; };
-		F4A879BB2EBDF6180019C091 /* ParakeetEncoder.mlpackage in Sources */ = {isa = PBXBuildFile; fileRef = F4A879B82EBDF6180019C091 /* ParakeetEncoder.mlpackage */; };
-		F4A879BE2EBDF6180019C091 /* ParakeetPreprocessor.mlpackage in Sources */ = {isa = PBXBuildFile; fileRef = F4A879BA2EBDF6180019C091 /* ParakeetPreprocessor.mlpackage */; };
-		F4AD72B72EC6DAD100E64F94 /* ParakeetDecoderJointer.mlpackage in Sources */ = {isa = PBXBuildFile; fileRef = F4AD72B62EC6DAD100E64F94 /* ParakeetDecoderJointer.mlpackage */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		F41F01E72ED50FA300662A47 /* WhisperDecoder_whisper-tiny.mlpackage */ = {isa = PBXFileReference; lastKnownFileType = folder.mlpackage; path = "WhisperDecoder_whisper-tiny.mlpackage"; sourceTree = "<group>"; };
+		F41F01E92ED50FAF00662A47 /* ParakeetDecoderJointer.mlpackage */ = {isa = PBXFileReference; lastKnownFileType = folder.mlpackage; path = ParakeetDecoderJointer.mlpackage; sourceTree = "<group>"; };
+		F41F01EA2ED50FAF00662A47 /* ParakeetEncoder.mlpackage */ = {isa = PBXFileReference; lastKnownFileType = folder.mlpackage; path = ParakeetEncoder.mlpackage; sourceTree = "<group>"; };
+		F41F01EB2ED50FAF00662A47 /* ParakeetPreprocessor.mlpackage */ = {isa = PBXFileReference; lastKnownFileType = folder.mlpackage; path = ParakeetPreprocessor.mlpackage; sourceTree = "<group>"; };
+		F41F01F12ED5140100662A47 /* Secrets.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Secrets.xcconfig; sourceTree = "<group>"; name = "Secrets.xcconfig"; path = "Config/Secrets.xcconfig"; };
 		F44325192EBD62E800B89542 /* README.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = README.md; sourceTree = "<group>"; };
 		F443251A2EBD62E800B89542 /* StatefulLlama3.2Instruct.mlpackage */ = {isa = PBXFileReference; lastKnownFileType = folder.mlpackage; path = StatefulLlama3.2Instruct.mlpackage; sourceTree = "<group>"; };
-		F443251B2EBD62E800B89542 /* WhisperDecoder_whisper-tiny.mlpackage */ = {isa = PBXFileReference; lastKnownFileType = folder.mlpackage; path = "WhisperDecoder_whisper-tiny.mlpackage"; sourceTree = "<group>"; };
 		F443251C2EBD62E800B89542 /* WhisperEncoder_whisper-tiny.mlpackage */ = {isa = PBXFileReference; lastKnownFileType = folder.mlpackage; path = "WhisperEncoder_whisper-tiny.mlpackage"; sourceTree = "<group>"; };
 		F44B05DA2EAB51FE009EBECA /* ChatMeet.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = ChatMeet.app; sourceTree = BUILT_PRODUCTS_DIR; };
-		F4A879B82EBDF6180019C091 /* ParakeetEncoder.mlpackage */ = {isa = PBXFileReference; lastKnownFileType = folder.mlpackage; name = ParakeetEncoder.mlpackage; path = /Users/jtu22/Documents/ParakeetTest/ParakeetEncoder.mlpackage; sourceTree = "<absolute>"; };
-		F4A879BA2EBDF6180019C091 /* ParakeetPreprocessor.mlpackage */ = {isa = PBXFileReference; lastKnownFileType = folder.mlpackage; name = ParakeetPreprocessor.mlpackage; path = /Users/jtu22/Documents/ParakeetTest/ParakeetPreprocessor.mlpackage; sourceTree = "<absolute>"; };
-		F4AD72B62EC6DAD100E64F94 /* ParakeetDecoderJointer.mlpackage */ = {isa = PBXFileReference; lastKnownFileType = folder.mlpackage; name = ParakeetDecoderJointer.mlpackage; path = /Users/jtu22/Documents/ParakeetTest/ParakeetDecoderJointer.mlpackage; sourceTree = "<absolute>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -58,12 +60,12 @@
 			isa = PBXGroup;
 			children = (
 				F44325192EBD62E800B89542 /* README.md */,
+				F41F01EA2ED50FAF00662A47 /* ParakeetEncoder.mlpackage */,
+				F41F01E92ED50FAF00662A47 /* ParakeetDecoderJointer.mlpackage */,
+				F41F01EB2ED50FAF00662A47 /* ParakeetPreprocessor.mlpackage */,
 				F443251A2EBD62E800B89542 /* StatefulLlama3.2Instruct.mlpackage */,
-				F443251B2EBD62E800B89542 /* WhisperDecoder_whisper-tiny.mlpackage */,
 				F443251C2EBD62E800B89542 /* WhisperEncoder_whisper-tiny.mlpackage */,
-				F4A879BA2EBDF6180019C091 /* ParakeetPreprocessor.mlpackage */,
-				F4A879B82EBDF6180019C091 /* ParakeetEncoder.mlpackage */,
-				F4AD72B62EC6DAD100E64F94 /* ParakeetDecoderJointer.mlpackage */,
+				F41F01E72ED50FA300662A47 /* WhisperDecoder_whisper-tiny.mlpackage */,
 			);
 			path = Models;
 			sourceTree = "<group>";
@@ -74,7 +76,16 @@
 				F443251D2EBD62E800B89542 /* Models */,
 				F44B05DC2EAB51FE009EBECA /* ChatMeet */,
 				F44B05DB2EAB51FE009EBECA /* Products */,
+				F41F01F12ED5140100662A47 /* Secrets.xcconfig */,
+				F44B06242ED51B9400009EBECA /* Config */,
 			);
+			sourceTree = "<group>";
+		};
+		F44B06242ED51B9400009EBECA /* Config */ = {
+			isa = PBXGroup;
+			children = (
+			);
+			path = Config;
 			sourceTree = "<group>";
 		};
 		F44B05DB2EAB51FE009EBECA /* Products */ = {
@@ -158,6 +169,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				F44325242EBD62E800B89542 /* README.md in Resources */,
+				F41F01F22ED5140100662A47 /* Secrets.xcconfig in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -169,11 +181,11 @@
 			buildActionMask = 2147483647;
 			files = (
 				F443251E2EBD62E800B89542 /* StatefulLlama3.2Instruct.mlpackage in Sources */,
-				F4AD72B72EC6DAD100E64F94 /* ParakeetDecoderJointer.mlpackage in Sources */,
+				F41F01EC2ED50FAF00662A47 /* ParakeetDecoderJointer.mlpackage in Sources */,
+				F41F01ED2ED50FAF00662A47 /* ParakeetPreprocessor.mlpackage in Sources */,
+				F41F01EE2ED50FAF00662A47 /* ParakeetEncoder.mlpackage in Sources */,
+				F41F01E82ED50FA300662A47 /* WhisperDecoder_whisper-tiny.mlpackage in Sources */,
 				F443251F2EBD62E800B89542 /* WhisperEncoder_whisper-tiny.mlpackage in Sources */,
-				F4A879BB2EBDF6180019C091 /* ParakeetEncoder.mlpackage in Sources */,
-				F4A879BE2EBDF6180019C091 /* ParakeetPreprocessor.mlpackage in Sources */,
-				F44325212EBD62E800B89542 /* WhisperDecoder_whisper-tiny.mlpackage in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -182,6 +194,7 @@
 /* Begin XCBuildConfiguration section */
 		F44B05E32EAB51FE009EBECA /* Debug */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = F41F01F12ED5140100662A47 /* Secrets.xcconfig */;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
 				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
@@ -244,6 +257,7 @@
 		};
 		F44B05E42EAB51FE009EBECA /* Release */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = F41F01F12ED5140100662A47 /* Secrets.xcconfig */;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
 				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;

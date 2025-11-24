@@ -34,6 +34,7 @@ class MeetingAssistantViewModel: ObservableObject {
     @Published public var summarizationTime: TimeInterval = 0
     @Published public var totalProcessingTime: TimeInterval = 0
     @Published public var tokensPerSecond: Double = 0
+    @Published public var realTimeFactor: Double = 0  // RTF = processing time / audio duration
     
     private let audioRecorder = AudioRecorder()
     private let transcriptionService = TranscriptionService()
@@ -187,6 +188,7 @@ class MeetingAssistantViewModel: ObservableObject {
                     self.summarizationTime = 0
                     self.totalProcessingTime = 0
                     self.tokensPerSecond = 0
+                    self.realTimeFactor = 0
                     self.tokenCount = 0
                     
                     // Start recording based on mode
@@ -243,12 +245,22 @@ class MeetingAssistantViewModel: ObservableObject {
         transcriptionStartTime = Date()
         processingStartTime = Date()
         streamingStartTime = Date()  // Track streaming start time
+        firstTokenTime = nil  // Reset for tracking TTFT
         
         do {
             try transcriptionService.startStreamingTranscription(
                 onUpdate: { [weak self] newTranscription in
                     guard let self = self else { return }
                     Task { @MainActor in
+                        // Track time to first token (first non-empty transcription)
+                        if self.firstTokenTime == nil && !newTranscription.isEmpty {
+                            self.firstTokenTime = Date()
+                            if let startTime = self.transcriptionStartTime {
+                                self.timeToFirstToken = Date().timeIntervalSince(startTime)
+                                print("📊 Time to First Token (Transcription): \(self.timeToFirstToken)s")
+                            }
+                        }
+                        
                         // Update transcription in real-time
                         self.transcription = newTranscription
                         self.streamingBuffer = newTranscription
@@ -263,6 +275,9 @@ class MeetingAssistantViewModel: ObservableObject {
     
     /// Stop audio recording and process the audio
     private func stopRecording() {
+        // Capture recording duration before stopping
+        let finalRecordingDuration = recordingDuration
+        
         // Stop the recording timer
         recordingTimer?.invalidate()
         recordingTimer = nil
@@ -273,12 +288,20 @@ class MeetingAssistantViewModel: ObservableObject {
             // Stop streaming transcription
             transcriptionService.stopStreamingTranscription()
             
+            // Preserve the recording duration
+            recordingDuration = finalRecordingDuration
+            
             // Calculate final statistics
             if let startTime = transcriptionStartTime {
                 transcriptionTime = Date().timeIntervalSince(startTime)
             }
             if let startTime = processingStartTime {
                 totalProcessingTime = Date().timeIntervalSince(startTime)
+            }
+            
+            // Calculate Real-Time Factor (RTF = transcription time / audio duration)
+            if recordingDuration > 0 {
+                realTimeFactor = transcriptionTime / recordingDuration
             }
             
             // Clear streaming start time
@@ -291,6 +314,10 @@ class MeetingAssistantViewModel: ObservableObject {
             
             // Stop recording and get audio data
             audioRecorder.stopRecording()
+            
+            // Preserve the recording duration (stopRecording resets the recorder's time)
+            recordingDuration = finalRecordingDuration
+            
             guard let audioData = audioRecorder.getRecordingData() else {
                 statusMessage = "Failed to capture audio"
                 transcription = "Error: Could not read recorded audio file"
@@ -324,6 +351,8 @@ class MeetingAssistantViewModel: ObservableObject {
         // Transcribe audio with live streaming
         statusMessage = "Transcribing audio..."
         transcriptionStartTime = Date()
+        firstTokenTime = nil  // Reset for tracking TTFT
+        
         do {
             // Automatically use long audio transcription for files > 30s
             let transcribedText = try await transcriptionService.transcribeLongAudio(
@@ -334,6 +363,15 @@ class MeetingAssistantViewModel: ObservableObject {
                 // Stream partial transcription to UI in real-time
                 guard let self = self else { return }
                 Task { @MainActor in
+                    // Track time to first token (first non-empty transcription)
+                    if self.firstTokenTime == nil && !partialText.isEmpty {
+                        self.firstTokenTime = Date()
+                        if let startTime = self.transcriptionStartTime {
+                            self.timeToFirstToken = Date().timeIntervalSince(startTime)
+                            print("📊 Time to First Token (Transcription): \(self.timeToFirstToken)s")
+                        }
+                    }
+                    
                     self.transcription = partialText
                 }
             }
@@ -343,8 +381,13 @@ class MeetingAssistantViewModel: ObservableObject {
                 transcriptionTime = Date().timeIntervalSince(startTime)
             }
             
-            // Update with final transcription
-            transcription = transcribedText
+            // Workaround: Clear and set final transcription to avoid duplication
+            // Wait a moment for any pending callbacks to complete, then replace with clean final result
+            try? await Task.sleep(nanoseconds: 100_000_000) // 100ms delay
+            await MainActor.run {
+                self.transcription = transcribedText  // Set final clean text
+                print("📝 Final merged text: '\(transcribedText)'")
+            }
             
             // Check if we got transcription
             guard !transcribedText.isEmpty else {
@@ -355,6 +398,11 @@ class MeetingAssistantViewModel: ObservableObject {
             // Calculate total processing time
             if let startTime = processingStartTime {
                 totalProcessingTime = Date().timeIntervalSince(startTime)
+            }
+            
+            // Calculate Real-Time Factor (RTF = transcription time / audio duration)
+            if recordingDuration > 0 {
+                realTimeFactor = transcriptionTime / recordingDuration
             }
             
             statusMessage = "Transcription complete. Click 'Summarize' to generate summary."
@@ -391,14 +439,6 @@ class MeetingAssistantViewModel: ObservableObject {
                 // Show LLM decision-making in real-time
                 Task { @MainActor in
                     guard let self = self else { return }
-                    
-                    // Track time to first token
-                    if self.firstTokenTime == nil && !partialActions.isEmpty {
-                        self.firstTokenTime = Date()
-                        if let startTime = self.summarizationStartTime {
-                            self.timeToFirstToken = Date().timeIntervalSince(startTime)
-                        }
-                    }
                     
                     // Estimate token count
                     let wordCount = partialActions.split(separator: " ").count
@@ -500,6 +540,16 @@ class MeetingAssistantViewModel: ObservableObject {
         summaryActionLog = ""
         summaryService.reset()
         
+        // Reset statistics
+        recordingDuration = 0
+        transcriptionTime = 0
+        timeToFirstToken = 0
+        summarizationTime = 0
+        totalProcessingTime = 0
+        tokensPerSecond = 0
+        realTimeFactor = 0
+        tokenCount = 0
+        
         // Convert and process the audio file
         guard let audioData = await audioRecorder.processUploadedFile(fileURL: fileURL) else {
             statusMessage = "Failed to process file"
@@ -512,6 +562,17 @@ class MeetingAssistantViewModel: ObservableObject {
             statusMessage = "File is empty"
             transcription = "Error: The audio file appears to be empty"
             return
+        }
+        
+        // Calculate recording duration from audio data
+        // Audio is 16kHz PCM, so duration = samples / sample_rate
+        do {
+            let samples = try AudioPreprocessor.extractPCMSamples(from: audioData)
+            recordingDuration = Double(samples.count) / 16000.0
+            print("📊 Uploaded file duration: \(recordingDuration)s (\(samples.count) samples)")
+        } catch {
+            print("⚠️ Could not calculate duration: \(error)")
+            // Continue processing even if duration calculation fails
         }
         
         // Process through transcription pipeline

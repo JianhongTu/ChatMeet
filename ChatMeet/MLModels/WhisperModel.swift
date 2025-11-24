@@ -8,29 +8,23 @@
 import Foundation
 @preconcurrency import CoreML
 @preconcurrency import Tokenizers
+import Accelerate
 
 /// Context for streaming transcription to maintain state across chunks
 class StreamingTranscriptionContext {    
-    // Token management (3-stage: committed, context, current)
-    var committedTokens: [Int] = []   // All past transcription (not used in generation)
-    var contextTokens: [Int] = []     // Last window's tokens (included in next generation for continuity)
-    var currentTokens: [Int] = []     // Current chunk being generated
-    
     // Audio management
-    var contextAudio: [Float] = []    // Audio from last window (up to 10s worth)
+    var contextAudio: [Float] = []    // Audio from last window (overlap portion)
     
     // Statistics
     var totalTokensGenerated: Int = 0
     var chunkCount: Int = 0
     
-    // Configuration
-    let maxContextDuration: Float = 5.0  // Keep up to 5 seconds of context
+    // Configuration - unified with Parakeet
+    let windowDuration: Float = 20.0     // 20 seconds window
+    let overlapDuration: Float = 2.0     // 2 seconds overlap
     let sampleRate: Float = 16000.0
     
     func reset() {
-        committedTokens = []
-        contextTokens = []
-        currentTokens = []
         contextAudio = []
         totalTokensGenerated = 0
         chunkCount = 0
@@ -112,18 +106,22 @@ class WhisperModel: @unchecked Sendable {
         let config = MLModelConfiguration()
         config.computeUnits = currentBackend.mlComputeUnits
         
-        // Load encoder model
+        // Load encoder model on background thread to prevent UI freeze
         guard let encoderURL = findModelURL(named: encoderModelName) else {
             throw WhisperError.modelNotFound(encoderModelName)
         }
-        encoderModel = try MLModel(contentsOf: encoderURL, configuration: config)
+        encoderModel = try await Task.detached(priority: .userInitiated) {
+            try MLModel(contentsOf: encoderURL, configuration: config)
+        }.value
         print("WhisperModel: ✓ Loaded encoder model")
         
-        // Load decoder model
+        // Load decoder model on background thread to prevent UI freeze
         guard let decoderURL = findModelURL(named: decoderModelName) else {
             throw WhisperError.modelNotFound(decoderModelName)
         }
-        decoderModel = try MLModel(contentsOf: decoderURL, configuration: config)
+        decoderModel = try await Task.detached(priority: .userInitiated) {
+            try MLModel(contentsOf: decoderURL, configuration: config)
+        }.value
         print("WhisperModel: ✓ Loaded decoder model")
     }
     
@@ -175,17 +173,22 @@ class WhisperModel: @unchecked Sendable {
     ///   - onProgress: Optional callback for real-time token streaming
     /// - Returns: Final transcribed text
     public func transcribe(_ audioData: Data, onProgress: (@Sendable (String) -> Void)? = nil) async throws -> String {
+        let transcribeStartTime = CFAbsoluteTimeGetCurrent()
+        
         // Wait for models to be loaded
         guard let encoder = encoderModel else {
             throw WhisperError.modelNotLoaded
         }
         
         // Extract PCM samples from WAV data using AudioPreprocessor
+        let preprocessStartTime = CFAbsoluteTimeGetCurrent()
         let samples = try AudioPreprocessor.extractPCMSamples(from: audioData)
         
         // Pad/trim to expected length
         let paddedSamples = AudioPreprocessor.padOrTrim(samples, to: expectedSamples)
         let audioInput = try convertToMLMultiArray(paddedSamples)
+        let preprocessTime = CFAbsoluteTimeGetCurrent() - preprocessStartTime
+        print("⏱️ WhisperModel Preprocessing: \(String(format: "%.3f", preprocessTime))s")
         
         // Run encoder to get audio features
         let encoderOutput = try runEncoder(encoder, input: audioInput)
@@ -197,115 +200,86 @@ class WhisperModel: @unchecked Sendable {
         
         let transcription = try await runDecoder(decoder, encoderOutput: encoderOutput, tokenizer: tokenizer, onProgress: onProgress)
         
+        let totalTranscribeTime = CFAbsoluteTimeGetCurrent() - transcribeStartTime
+        print("⏱️ WhisperModel Total Transcription: \(String(format: "%.3f", totalTranscribeTime))s")
+        
         return transcription
     }
     
-    /// Transcribe audio incrementally with 3-stage context management
+    /// Transcribe audio incrementally with audio overlap strategy (unified with Parakeet)
     /// - Parameters:
     ///   - audioData: Audio data (30s ring buffer window)
-    ///   - context: Streaming context with committed/context/current stages
+    ///   - context: Streaming context with audio overlap
     ///   - onProgress: Optional callback for streaming token updates
     /// - Returns: Only the NEW transcription text from this chunk
-    /// - Note: Uses 3-stage strategy:
-    ///         - Committed: Past transcriptions (not in generation)
-    ///         - Context: Last window's audio+tokens (for continuity, up to 10s)
-    ///         - Current: New 5s chunk being transcribed
+    /// - Note: Uses audio overlap strategy matching Parakeet:
+    ///         - Window: 20 seconds of audio
+    ///         - Overlap: 2 seconds with previous window
+    ///         - Deduplication: Word-based overlap removal
     public func transcribeIncremental(audioData: Data, context: StreamingTranscriptionContext, onProgress: (@Sendable (String) -> Void)? = nil) async throws -> String {
         guard let encoder = encoderModel, let decoder = decoderModel, let tokenizer = tokenizer else {
             throw WhisperError.modelNotLoaded
         }
         
         context.chunkCount += 1
-        print("🔵 WhisperModel: Chunk #\(context.chunkCount) - 3-stage processing")
+        #if DEBUG
+        print("🔵 WhisperModel: Chunk #\(context.chunkCount) - 20s window with 2s overlap")
+        #endif
         
         // Extract PCM samples from WAV data (full 30s ring buffer) using AudioPreprocessor
         let samples = try AudioPreprocessor.extractPCMSamples(from: audioData)
         
-        // STAGE 1: Extract the NEWEST 5 seconds (current chunk)
-        let chunkDurationSeconds: Float = 5.0
-        let chunkSampleCount = Int(chunkDurationSeconds * context.sampleRate)
-        let startIndex = max(0, samples.count - chunkSampleCount)
-        let currentChunkAudio = Array(samples[startIndex..<samples.count])
+        // Extract window: overlap (2s) + new audio (18s) = 20s total
+        let windowSamples = Int(context.windowDuration * context.sampleRate)      // 20s = 320,000 samples
+        let overlapSamples = Int(context.overlapDuration * context.sampleRate)    // 2s = 32,000 samples
+        let newAudioSamples = windowSamples - overlapSamples                      // 18s = 288,000 samples
         
-        // STAGE 2: Combine context audio (up to 5s) + current chunk (5s)
-        // This gives the encoder both recent context and new audio
-        let maxContextSamples = Int(context.maxContextDuration * context.sampleRate)
+        // Get the newest audio from the ring buffer
+        let startIndex = max(0, samples.count - newAudioSamples)
+        let newAudio = Array(samples[startIndex..<samples.count])
         
-        // Trim context audio if needed to fit within limit
-        let contextToUse = context.contextAudio.suffix(maxContextSamples)
+        // Combine overlap from previous window + new audio
+        let overlapToUse = context.contextAudio.suffix(overlapSamples)
+        let windowAudio = Array(overlapToUse) + newAudio
         
-        // Combine: [context audio] + [current chunk audio]
-        let combinedAudio = Array(contextToUse) + currentChunkAudio
+        #if DEBUG
+        print("🔵 WhisperModel: Overlap audio: \(overlapToUse.count) samples (~\(Float(overlapToUse.count)/context.sampleRate)s)")
+        print("🔵 WhisperModel: New audio: \(newAudio.count) samples (~\(Float(newAudio.count)/context.sampleRate)s)")
+        print("🔵 WhisperModel: Window total: \(windowAudio.count) samples (~\(Float(windowAudio.count)/context.sampleRate)s)")
+        #endif
         
-        // Pad to 30 seconds (480,000 samples) - put combined audio at END with leading zeros
-        var paddedSamples = [Float](repeating: 0.0, count: expectedSamples)
-        let insertPosition = expectedSamples - combinedAudio.count
-        for (i, sample) in combinedAudio.enumerated() {
-            paddedSamples[insertPosition + i] = sample
-        }
+        // Pad to 30 seconds (480,000 samples) - put window at END with leading zeros
+        let paddedSamples = AudioPreprocessor.padOrTrim(windowAudio, to: expectedSamples)
         
-        print("🔵 WhisperModel: Context audio: \(contextToUse.count) samples (~\(Float(contextToUse.count)/context.sampleRate)s)")
-        print("🔵 WhisperModel: Current audio: \(currentChunkAudio.count) samples (~\(Float(currentChunkAudio.count)/context.sampleRate)s)")
-        print("🔵 WhisperModel: Combined: \(combinedAudio.count) samples, padded to \(expectedSamples)")
-        
-        // Convert to MLMultiArray and run encoder on combined audio
+        // Convert to MLMultiArray and run encoder
         let audioInput = try convertToMLMultiArray(paddedSamples)
         let encoderOutput = try runEncoder(encoder, input: audioInput)
         
-        // Run decoder incrementally with context, reusing KV cache
-        let newTokens = try await runDecoderIncremental(
-            decoder,
-            encoderOutput: encoderOutput,
-            context: context,
-            tokenizer: tokenizer,
-            onProgress: onProgress
-        )
+        // Run decoder WITHOUT context tokens (fresh prompt each time)
+        let transcription = try await runDecoder(decoder, encoderOutput: encoderOutput, tokenizer: tokenizer, onProgress: onProgress)
         
-        // STAGE 4: Update context for next chunk
-        // Move old context tokens to committed
-        context.committedTokens.append(contentsOf: context.contextTokens)
-        
-        // Current tokens become the new context (remove prompt tokens first)
-        let promptLength = 4   // Whisper prompt length
-        let actualGeneratedTokens = context.currentTokens.count > promptLength ? 
-            Array(context.currentTokens.dropFirst(promptLength)) : []
-        context.contextTokens = newTokens
-        
-        // Update context audio: combine old context + current chunk, keep last 10s
-        let maxContextSamplesForUpdate = Int(context.maxContextDuration * context.sampleRate)
-        let combinedContextAudio = context.contextAudio + currentChunkAudio
-        context.contextAudio = Array(combinedContextAudio.suffix(maxContextSamplesForUpdate))
+        // Update context audio for next chunk (save current new audio as overlap)
+        context.contextAudio = newAudio
         
         // Update statistics
-        context.totalTokensGenerated += newTokens.count
-
-        // Decode only the NEW tokens to text
-        // Don't skip prompt tokens since newTokens are already filtered
-        let newTranscription = decodeTokens(newTokens, using: tokenizer, skipPrompt: false)
+        context.totalTokensGenerated += transcription.split(separator: " ").count
         
-        print("🔵 WhisperModel: Chunk #\(context.chunkCount) complete:")
-        print("   - Inputs: \(decodeTokens(context.contextTokens, using: tokenizer))")
-        print("   - New tokens generated: \(newTranscription)")
+        #if DEBUG
+        print("🔵 WhisperModel: Chunk #\(context.chunkCount) complete - transcription: '\(transcription)'")
+        #endif
         
-        
-        
-        return newTranscription
+        return transcription
     }
     
     // MARK: - Audio Preprocessing
     // Note: Basic audio preprocessing (WAV parsing, PCM decoding, resampling)
     // has been moved to AudioPreprocessor.swift for reuse across models
     
-    /// Convert float array to MLMultiArray [1, N]
+    /// Convert float array to MLMultiArray [1, N] using MLShapedArray
     private func convertToMLMultiArray(_ samples: [Float]) throws -> MLMultiArray {
-        let shape = [1, samples.count] as [NSNumber]
-        let mlArray = try MLMultiArray(shape: shape, dataType: .float32)
-        
-        for (i, sample) in samples.enumerated() {
-            mlArray[[0, i] as [NSNumber]] = NSNumber(value: sample)
-        }
-        
-        return mlArray
+        // Use MLShapedArray for efficient conversion
+        let shaped = MLShapedArray(scalars: samples, shape: [1, samples.count])
+        return MLMultiArray(shaped)
     }
     
     // MARK: - Model Inference
@@ -316,6 +290,8 @@ class WhisperModel: @unchecked Sendable {
     ///   - input: Raw audio waveform as MLMultiArray [1, 480000]
     /// - Returns: Encoder output features (encoderHiddenStates)
     private func runEncoder(_ encoder: MLModel, input: MLMultiArray) throws -> MLMultiArray {
+        let startTime = CFAbsoluteTimeGetCurrent()
+        
         // Create input feature provider
         let inputName = "audioInput"
         let inputFeatures = try MLDictionaryFeatureProvider(dictionary: [inputName: MLFeatureValue(multiArray: input)])
@@ -329,6 +305,9 @@ class WhisperModel: @unchecked Sendable {
             throw WhisperError.inferenceFailed("Failed to extract encoder output")
         }
         
+        let encoderTime = CFAbsoluteTimeGetCurrent() - startTime
+        print("⏱️ WhisperModel Encoder: \(String(format: "%.3f", encoderTime))s")
+        
         return encoderOutput
     }
     
@@ -339,6 +318,8 @@ class WhisperModel: @unchecked Sendable {
     ///   - tokenizer: Tokenizer for decoding
     /// - Returns: Transcribed text
     private func runDecoder(_ decoder: MLModel, encoderOutput: MLMultiArray, tokenizer: Tokenizer, onProgress: (@Sendable (String) -> Void)? = nil) async throws -> String {
+        let totalStartTime = CFAbsoluteTimeGetCurrent()
+        
         // Special tokens for Whisper
         // Whisper uses specific token IDs - these may need adjustment based on actual model
         let startTokenId = 50258  // <|startoftranscript|>
@@ -354,152 +335,121 @@ class WhisperModel: @unchecked Sendable {
         let state = decoder.makeState()
         
         var isPrefill = true
+        
+        // Repetition detection: track consecutive identical tokens
+        var repetitionCount = 0
+        let maxRepetitions = 5  // Stop if same token repeats >5 times
+        
+        // Timing metrics
+        var totalPrepareInputTime: Double = 0
+        var totalInferenceTime: Double = 0
+        var totalTokenizerTime: Double = 0
+        var iterationCount = 0
 
         // Autoregressive decoding
         for _ in 0..<maxTokens {
+            // Check if we're about to exceed max tokens BEFORE preparing input
+            if generatedTokens.count >= maxTokens {
+                #if DEBUG
+                print("⚠️ WhisperModel: Reached max token limit (\(maxTokens))")
+                #endif
+                break
+            }
+            
             // Prepare decoder input
+            let prepareStartTime = CFAbsoluteTimeGetCurrent()
             let decoderInput = try prepareDecoderInput(
                 tokens: generatedTokens,
                 encoderOutput: encoderOutput,
                 isPrefill: isPrefill
             )
+            totalPrepareInputTime += CFAbsoluteTimeGetCurrent() - prepareStartTime
             
             // Run decoder inference with state
             // The state maintains the KV cache across iterations
+            let inferenceStartTime = CFAbsoluteTimeGetCurrent()
             let output = try await decoder.prediction(from: decoderInput, using: state)
+            totalInferenceTime += CFAbsoluteTimeGetCurrent() - inferenceStartTime
             
-            // Get next token logits
-            guard let logits = extractLogits(from: output) else {
-                throw WhisperError.inferenceFailed("Failed to extract logits")
+            iterationCount += 1
+            
+            // Get next token ID directly from model output
+            guard let nextToken = extractMaxTokenId(from: output) else {
+                throw WhisperError.inferenceFailed("Failed to extract max token ID")
             }
-            
-            // Get most probable token (greedy decoding)
-            let nextToken = argmax(logits)
             
             // Check for end of transcription
             if nextToken == eotTokenId {
                 break
+            }
+            
+            // Repetition detection: check if this token is same as previous
+            if generatedTokens.count > promptTokens.count {
+                let prevToken = generatedTokens[generatedTokens.count - 1]
+                if nextToken == prevToken {
+                    repetitionCount += 1
+                    if repetitionCount >= maxRepetitions {
+                        #if DEBUG
+                        print("⚠️ WhisperModel: Detected repetition loop (token \(nextToken) repeated \(repetitionCount + 1) times) - stopping generation")
+                        #endif
+                        break
+                    }
+                } else {
+                    repetitionCount = 0  // Reset counter when token changes
+                }
             }
             
             generatedTokens.append(nextToken)
             isPrefill = false
             
             // Stream partial transcription if callback is provided
-            if let onProgress = onProgress {
+            // Throttle: only decode every 10 tokens to avoid expensive tokenizer calls
+            if let onProgress = onProgress, generatedTokens.count % 10 == 0 {
+                let tokenizerStartTime = CFAbsoluteTimeGetCurrent()
                 let partialTranscription = decodeTokens(generatedTokens, using: tokenizer)
+                let cleanedPartial = deduplicateRepetitions(partialTranscription)
+                totalTokenizerTime += CFAbsoluteTimeGetCurrent() - tokenizerStartTime
                 
                 // Dispatch to main thread asynchronously to avoid blocking decoding
                 Task { @MainActor in
-                    onProgress(partialTranscription)
+                    onProgress(cleanedPartial)
                 }
             }
         }
         
-        // Decode tokens to text
+        // Decode tokens to text (final)
+        let tokenizerStartTime = CFAbsoluteTimeGetCurrent()
         let transcription = decodeTokens(generatedTokens, using: tokenizer)
+        totalTokenizerTime += CFAbsoluteTimeGetCurrent() - tokenizerStartTime
         
-        return transcription
-    }
-    
-    /// Run decoder incrementally with KV cache reuse
-    /// - Parameters:
-    ///   - decoder: Decoder MLModel
-    ///   - encoderOutput: Output from encoder (new audio segment)
-    ///   - context: Streaming context with existing state
-    ///   - tokenizer: Tokenizer for decoding
-    ///   - onProgress: Optional callback for streaming
-    /// - Returns: Array of newly generated token IDs
-    private func runDecoderIncremental(_ decoder: MLModel, encoderOutput: MLMultiArray, context: StreamingTranscriptionContext, tokenizer: Tokenizer, onProgress: (@Sendable (String) -> Void)? = nil) async throws -> [Int] {
-        let eotTokenId = 50257  // <|endoftext|>
-        let startTokenId = 50258  // <|startoftranscript|>
-        let maxTokens = 448
+        // Remove any repeated phrases from the output
+        let cleanedTranscription = deduplicateRepetitions(transcription)
         
-        var newTokens: [Int] = []
+        let totalTime = CFAbsoluteTimeGetCurrent() - totalStartTime
         
-        // Create fresh decoder state for this chunk (matches new encoder output)
-        let decoderState = decoder.makeState()
-        let promptTokens: [Int] = [startTokenId, 50259, 50359, 50363]
+        // Print timing breakdown
+        print("⏱️ WhisperModel Decoder Timing:")
+        print("   Total iterations: \(iterationCount)")
+        print("   Prepare input: \(String(format: "%.3f", totalPrepareInputTime))s (\(String(format: "%.1f", totalPrepareInputTime/totalTime*100))%)")
+        print("   Inference: \(String(format: "%.3f", totalInferenceTime))s (\(String(format: "%.1f", totalInferenceTime/totalTime*100))%)")
+        print("   Tokenizer: \(String(format: "%.3f", totalTokenizerTime))s (\(String(format: "%.1f", totalTokenizerTime/totalTime*100))%)")
+        print("   Total: \(String(format: "%.3f", totalTime))s")
+        print("   Avg per iteration: \(String(format: "%.3f", totalTime/Double(iterationCount)))s")
         
-        // STAGE 3: Initialize with prompt + context tokens for continuity
-        // Context tokens provide transcription history for better coherence
-        var initialTokens = promptTokens + context.contextTokens
-        context.currentTokens = initialTokens
-
-        print("🔵 WhisperModel: Prefill prompt: \(decodeTokens(initialTokens, using: tokenizer))")
-
-        // // Prefill with prompt + context tokens
-        // let prefillInput = try prepareDecoderInput(
-        //     tokens: initialTokens,
-        //     encoderOutput: encoderOutput,
-        //     isPrefill: true
-        // )
-        // _ = try await decoder.prediction(from: prefillInput, using: decoderState)
+        #if DEBUG
+        if transcription != cleanedTranscription {
+            print("⚠️ WhisperModel: Removed repetitions: \(transcription.count - cleanedTranscription.count) chars")
+        }
+        #endif
         
-                
-        // Generate tokens for this chunk only (fresh state each time)
-        let tokensToGenerate = 50  // Generate ~50 tokens per chunk (roughly 5 seconds of speech)
-        print("🔵 WhisperModel: Starting decode for new chunk - will generate up to \(tokensToGenerate) tokens")
-        var firstToken = true
-        for iteration in 0..<tokensToGenerate {
-            // Check if we've hit max tokens
-            if context.currentTokens.count >= maxTokens {
-                print("⚠️ WhisperModel: Hit max token limit (\(maxTokens)) - stopping generation")
-                break
-            }
-            
-            // Prepare input with only the last token (since we're using KV cache)
-            let decoderInput = try prepareDecoderInput(
-                tokens: context.currentTokens,
-                encoderOutput: encoderOutput,
-                isPrefill: firstToken // Extension mode with KV cache
-            )
-            firstToken = false
-            
-            // Run decoder with existing state (reuses KV cache)
-            let output: MLFeatureProvider
-            do {
-                output = try await decoder.prediction(from: decoderInput, using: decoderState)
-            } catch {
-                print("❌ WhisperModel: Decoder prediction failed at token \(context.currentTokens.count): \(error)")
-                throw WhisperError.inferenceFailed("Decoder failed at \(context.currentTokens.count) tokens: \(error.localizedDescription)")
-            }
-            
-            // Extract logits
-            guard let logits = extractLogits(from: output) else {
-                print("❌ WhisperModel: Failed to extract logits at token \(context.currentTokens.count)")
-                throw WhisperError.inferenceFailed("Failed to extract logits")
-            }
-            
-            // Get next token
-            let nextToken = argmax(logits)
-            
-            // Log if we're getting repetitive tokens (possible sign of KV cache issues)
-            if context.currentTokens.count > 100 && iteration % 5 == 0 {
-                print("🔵 WhisperModel: Token \(context.currentTokens.count): ID=\(nextToken), topLogit=\(logits[nextToken])")
-            }
-            
-            // Check for end of transcription
-            if nextToken == eotTokenId {
-                print("🔵 WhisperModel: EOT token detected at iteration \(iteration) - stopping generation")
-                break
-            }
-            
-            // Add to current tokens and new tokens
-            context.currentTokens.append(nextToken)
-            newTokens.append(nextToken)
-            
-            // Stream if callback provided (show cumulative transcription)
-            if let onProgress = onProgress {
-                let cumulativeTranscription = decodeTokens(newTokens, using: tokenizer, skipPrompt: false)
-                
-                // Dispatch to main thread asynchronously to avoid blocking decoding
-                Task { @MainActor in
-                    onProgress(cumulativeTranscription)
-                }
+        // Send final update if we didn't just send one
+        if let onProgress = onProgress, generatedTokens.count % 10 != 0 {
+            Task { @MainActor in
+                onProgress(cleanedTranscription)
             }
         }
         
-        return newTokens
+        return cleanedTranscription
     }
     
     /// Prepare decoder input from tokens and encoder output
@@ -511,19 +461,25 @@ class WhisperModel: @unchecked Sendable {
         if isPrefill {
             // Feed the entire prompt sequence to build KV cache
             let seqLen = tokens.count
-            let tokenArray = try MLMultiArray(shape: [1, NSNumber(value: seqLen)], dataType: .int32)
-            for (i, t) in tokens.enumerated() {
-                tokenArray[[0, i] as [NSNumber]] = NSNumber(value: t)
-            }
+            
+            // Convert tokens using MLShapedArray
+            let tokenArray = MLMultiArray(MLShapedArray(scalars: tokens.map { Int32($0) }, shape: [1, seqLen]))
 
             // Causal mask: lower-triangular for self-attention during prefill
-            let causalMask = try MLMultiArray(shape: [1, 1, NSNumber(value: seqLen), NSNumber(value: seqLen)], dataType: .float32)
+            // Create mask efficiently: all zeros with -inf in upper triangle
+            let maskSize = seqLen * seqLen
+            var maskValues = [Float](repeating: 0.0, count: maskSize)
+            
+            // Set upper triangle to -inf using stride for better cache locality
             for i in 0..<seqLen {
-                for j in 0..<seqLen {
-                    let maskVal: Float = j > i ? -Float.infinity : 0.0
-                    causalMask[[0, 0, i, j] as [NSNumber]] = NSNumber(value: maskVal)
+                let rowStart = i * seqLen + i + 1
+                if rowStart < (i + 1) * seqLen {
+                    let upperTriangleCount = seqLen - i - 1
+                    vDSP_vfill([-Float.infinity], &maskValues[rowStart], 1, vDSP_Length(upperTriangleCount))
                 }
             }
+            
+            let causalMask = MLMultiArray(MLShapedArray(scalars: maskValues, shape: [1, 1, seqLen, seqLen]))
 
             let inputDict: [String: MLFeatureValue] = [
                 "inputIds": MLFeatureValue(multiArray: tokenArray),
@@ -533,16 +489,15 @@ class WhisperModel: @unchecked Sendable {
             return try MLDictionaryFeatureProvider(dictionary: inputDict)
         } else {
             // Extension step: feed only the last token
-            let lastToken = tokens.last!
-            let tokenArray = try MLMultiArray(shape: [1, 1] as [NSNumber], dataType: .int32)
-            tokenArray[[0, 0] as [NSNumber]] = NSNumber(value: lastToken)
+            // Reuse single-element arrays - create once per call is still fast enough
+            let lastToken = Int32(tokens.last!)
+            let tokenArray = MLMultiArray(MLShapedArray(scalars: [lastToken], shape: [1, 1]))
 
-            // With KV cache, mask can be zeros over full past length
+            // With KV cache, mask is all zeros - grow as needed
+            // This is lightweight since it's just zeros
             let pastSeqLen = tokens.count
             let causalMask = try MLMultiArray(shape: [1, 1, 1, NSNumber(value: pastSeqLen)], dataType: .float32)
-            for j in 0..<pastSeqLen {
-                causalMask[[0, 0, 0, j] as [NSNumber]] = 0
-            }
+            // All zeros by default, no need to set
 
             let inputDict: [String: MLFeatureValue] = [
                 "inputIds": MLFeatureValue(multiArray: tokenArray),
@@ -553,41 +508,17 @@ class WhisperModel: @unchecked Sendable {
         }
     }
     
-    /// Extract logits from decoder output
+    /// Extract max token ID from decoder output
     /// - Parameter output: Decoder output features
-    /// - Returns: Logits array
-    private func extractLogits(from output: MLFeatureProvider) -> [Float]? {
-        let outputName = "logits"
-        guard let logitsArray = output.featureValue(for: outputName)?.multiArrayValue else {
+    /// - Returns: Token ID with maximum probability
+    private func extractMaxTokenId(from output: MLFeatureProvider) -> Int? {
+        let outputName = "tokenId"
+        guard let tokenIdValue = output.featureValue(for: outputName)?.multiArrayValue else {
             return nil
         }
         
-        // Extract last token's logits
-        let vocabSize = logitsArray.shape.last?.intValue ?? 51865  // Whisper vocab size
-        var logits = [Float](repeating: 0, count: vocabSize)
-        
-        for i in 0..<vocabSize {
-            logits[i] = logitsArray[[0, logitsArray.shape[1].intValue - 1, i] as [NSNumber]].floatValue
-        }
-        
-        return logits
-    }
-    
-    /// Get index of maximum value (argmax)
-    /// - Parameter array: Input array
-    /// - Returns: Index of maximum value
-    private func argmax(_ array: [Float]) -> Int {
-        var maxIndex = 0
-        var maxValue = array[0]
-        
-        for (i, value) in array.enumerated() {
-            if value > maxValue {
-                maxValue = value
-                maxIndex = i
-            }
-        }
-        
-        return maxIndex
+        // Extract the token ID (should be a scalar or [1] array)
+        return tokenIdValue[0].intValue
     }
     
     /// Decode token IDs to text using tokenizer
@@ -610,7 +541,97 @@ class WhisperModel: @unchecked Sendable {
         // Decode using tokenizer
         let decoded = tokenizer.decode(tokens: textTokens)
         
-        return decoded.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Remove any special tokens that might still appear in the decoded text
+        var cleaned = decoded
+        let specialTokens = [
+            "<|startoftranscript|>",
+            "<|en|>",
+            "<|transcribe|>",
+            "<|notimestamps|>",
+            "<|nocaptions|>",
+            "<|endoftext|>"
+        ]
+        
+        for token in specialTokens {
+            cleaned = cleaned.replacingOccurrences(of: token, with: "")
+        }
+        
+        return cleaned.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+    
+    /// Remove repeated phrases and words from transcription
+    /// - Parameter text: Transcribed text potentially with repetitions
+    /// - Returns: Text with repetitions removed
+    private func deduplicateRepetitions(_ text: String) -> String {
+        guard !text.isEmpty else { return text }
+        
+        // Split into words while preserving punctuation
+        let words = text.split(separator: " ").map(String.init)
+        guard words.count > 1 else { return text }
+        
+        var result: [String] = []
+        var i = 0
+        
+        while i < words.count {
+            let currentWord = words[i]
+            
+            // Look ahead to find if there's a repetitive pattern
+            var patternLength = 1
+            let maxPatternLength = min(20, (words.count - i) / 2)  // Don't look for patterns longer than 20 words
+            var foundRepetition = false
+            
+            // Try to find repeating patterns starting from longer sequences
+            for length in stride(from: maxPatternLength, through: 1, by: -1) {
+                if i + length * 2 <= words.count {
+                    // Check if the pattern repeats
+                    let pattern = words[i..<(i + length)]
+                    let nextSegment = words[(i + length)..<min(i + length * 2, words.count)]
+                    
+                    // Compare normalized versions (case-insensitive, trim punctuation)
+                    let patternNormalized = pattern.map { $0.lowercased().trimmingCharacters(in: .punctuationCharacters) }
+                    let nextNormalized = nextSegment.map { $0.lowercased().trimmingCharacters(in: .punctuationCharacters) }
+                    
+                    if patternNormalized == Array(nextNormalized.prefix(length)) {
+                        patternLength = length
+                        foundRepetition = true
+                        
+                        #if DEBUG
+                        print("🔍 WhisperModel: Found repetition of \(length) words: '\(pattern.joined(separator: " "))'")
+                        #endif
+                        break
+                    }
+                }
+            }
+            
+            if foundRepetition {
+                // Add the pattern once, skip all repetitions
+                result.append(contentsOf: words[i..<(i + patternLength)])
+                
+                // Count how many times it repeats and skip them all
+                var skipCount = patternLength
+                while i + skipCount + patternLength <= words.count {
+                    let nextPattern = words[(i + skipCount)..<(i + skipCount + patternLength)]
+                    let pattern = words[i..<(i + patternLength)]
+                    
+                    let nextNormalized = nextPattern.map { $0.lowercased().trimmingCharacters(in: .punctuationCharacters) }
+                    let patternNormalized = pattern.map { $0.lowercased().trimmingCharacters(in: .punctuationCharacters) }
+                    
+                    if nextNormalized == patternNormalized {
+                        skipCount += patternLength
+                    } else {
+                        break
+                    }
+                }
+                
+                i += skipCount
+            } else {
+                // No repetition found, add current word and move on
+                result.append(currentWord)
+                i += 1
+            }
+        }
+        
+        return result.joined(separator: " ")
     }
 }
 
