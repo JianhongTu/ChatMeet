@@ -73,11 +73,11 @@ public class LiveAudioSource: NSObject, AudioSource, @unchecked Sendable {
         
         // Use dual mode with same callback for both (legacy compatibility)
         try processor?.startStreaming(
-            onHypothesis: { [weak self] audioData in
-                self?.convertAndEmit(audioData: audioData, onChunk: onChunk)
+            onHypothesis: { [weak self] audioData, startSample in
+                self?.convertAndEmit(audioData: audioData, startSample: startSample, onChunk: onChunk)
             },
-            onConfirmation: { [weak self] audioData in
-                self?.convertAndEmit(audioData: audioData, onChunk: onChunk)
+            onConfirmation: { [weak self] audioData, startSample in
+                self?.convertAndEmit(audioData: audioData, startSample: startSample, onChunk: onChunk)
             }
         )
     }
@@ -92,31 +92,33 @@ public class LiveAudioSource: NSObject, AudioSource, @unchecked Sendable {
         startTime = Date()
         processor = StreamingAudioProcessor()
         
-        // Dual mode with separate callbacks
+        // Dual mode with separate callbacks - now receives sample positions
         try processor?.startStreaming(
-            onHypothesis: { [weak self] audioData in
-                self?.convertAndEmit(audioData: audioData, onChunk: onHypothesis)
+            onHypothesis: { [weak self] audioData, startSample in
+                self?.convertAndEmit(audioData: audioData, startSample: startSample, onChunk: onHypothesis)
             },
-            onConfirmation: { [weak self] audioData in
-                self?.convertAndEmit(audioData: audioData, onChunk: onConfirmation)
+            onConfirmation: { [weak self] audioData, startSample in
+                self?.convertAndEmit(audioData: audioData, startSample: startSample, onChunk: onConfirmation)
             }
         )
     }
     
-    private func convertAndEmit(audioData: Data, onChunk: @escaping @Sendable (AudioChunk) -> Void) {
-        guard let startTime = self.startTime else { return }
-        
+    private func convertAndEmit(
+        audioData: Data,
+        startSample: Int,
+        onChunk: @escaping @Sendable (AudioChunk) -> Void
+    ) {
         // Extract samples from WAV data
         do {
             let samples = try AudioPreprocessor.extractPCMSamples(from: audioData)
-            let currentTime = Date().timeIntervalSince(startTime)
+            let startTime = Double(startSample) / Double(self.sampleRate)
             let duration = Double(samples.count) / Double(self.sampleRate)
             
-            // Create AudioChunk
+            // Create AudioChunk with precise sample-based timing
             let chunk = AudioChunk(
                 samples: samples,
-                startTime: max(0, currentTime - duration),
-                endTime: currentTime,
+                startTime: startTime,
+                endTime: startTime + duration,
                 overlapWithPrevious: 0,
                 overlapWithNext: 0,
                 sampleRate: self.sampleRate

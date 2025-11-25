@@ -27,7 +27,6 @@ public class StreamingTranscriptionCoordinator {
     private var confirmationTokens: [TokenWindow] = []  // Accurate final tokens (accumulated)
     private let tokenMerger = TokenMerger()
     private let confirmationOverlap: Double = 2.0  // 2s overlap for confirmation
-    private var confirmationSampleOffset: Int = 0  // Global offset in samples (not frames) for precision
     private let samplesPerFrame: Int = 1280  // Parakeet encoder frame size (80ms @ 16kHz)
     
     // MARK: - Initialization
@@ -69,7 +68,6 @@ public class StreamingTranscriptionCoordinator {
         self.hypothesisText = ""
         self.context = StreamingTranscriptionContext()
         self.isStreaming = true
-        self.confirmationSampleOffset = 0
         
         print("StreamingTranscriptionCoordinator: ✅ Starting dual-mode streaming with \(model.modelName)")
         
@@ -109,7 +107,6 @@ public class StreamingTranscriptionCoordinator {
         onAttributedUpdate = nil
         isStreaming = false
         confirmationTokens = []
-        confirmationSampleOffset = 0
         hypothesisText = ""
     }
     
@@ -192,12 +189,13 @@ public class StreamingTranscriptionCoordinator {
             let (tokens, tokenStartFrames, confidences) = try await model.transcribeWithTokens(chunk) { _ in }
             
             // Convert to TokenWindow with absolute frame positions
-            // tokenStartFrames are relative to this chunk - convert to absolute
+            // Use chunk's startTime to determine absolute position in the stream
+            let chunkStartSamples = Int(chunk.startTime * 16000.0)  // Convert startTime to samples
             var newTokenWindows: [TokenWindow] = []
             for i in 0..<tokens.count {
-                // Convert frame offset to samples, add chunk's offset, convert back to frames
+                // Convert relative frame to absolute frame using chunk start position
                 let relativeFrameSamples = tokenStartFrames[i] * samplesPerFrame
-                let absoluteSamples = relativeFrameSamples + confirmationSampleOffset
+                let absoluteSamples = chunkStartSamples + relativeFrameSamples
                 let absoluteFrame = absoluteSamples / samplesPerFrame
                 
                 newTokenWindows.append(TokenWindow(
@@ -209,36 +207,34 @@ public class StreamingTranscriptionCoordinator {
             
             let newChunkText = model.decodeTokens(tokens)
             
-            // Skip if no tokens generated (shouldn't happen with 15s chunks, but safety check)
+            // Skip if no tokens generated
             guard !newTokenWindows.isEmpty else {
-                let strideDuration = 13.0
-                let strideSamples = Int(strideDuration * 16000.0)  // Exact samples: 208,000
-                confirmationSampleOffset += strideSamples
                 return
             }
             
-            // Merge with previous confirmation tokens
+            // With VAD-driven segments, each confirmation is a complete segment (B→E)
+            // Segments are separated by silence, so should NEVER overlap - always concatenate
             let mergedTokens: [TokenWindow]
             if confirmationTokens.isEmpty {
                 mergedTokens = newTokenWindows
-                print("🟢 CONFIRMATION: \"\(newChunkText)\"")
+                print("🟢 CONFIRMATION: \"\(newChunkText)\" [\(newTokenWindows.count) tokens]")
             } else {
-                mergedTokens = tokenMerger.mergeChunks(
-                    confirmationTokens,
-                    newTokenWindows,
-                    overlapSeconds: confirmationOverlap
-                )
-                let previousText = model.decodeTokens(confirmationTokens.map { $0.token })
-                print("🟢 CONFIRMATION: \"\(newChunkText)\"")
-                print("🔀 MERGED: prev(\(confirmationTokens.count)) + new(\(newTokenWindows.count)) → total(\(mergedTokens.count))")
+                // VAD segments are always sequential (separated by silence)
+                // Just concatenate - no merging needed
+                mergedTokens = confirmationTokens + newTokenWindows
+                
+                let lastConfirmedFrame = confirmationTokens.last!.timestamp
+                let firstNewFrame = newTokenWindows.first!.timestamp
+                let gap = firstNewFrame - lastConfirmedFrame
+                
+                print("🟢 CONFIRMATION: \"\(newChunkText)\" [\(newTokenWindows.count) tokens]")
+                print("➕ CONCATENATE: prev(\(confirmationTokens.count)) + new(\(newTokenWindows.count)) = \(mergedTokens.count) tokens, gap=\(gap) frames")
             }
             
             confirmationTokens = mergedTokens
             
-            // Update sample offset (13s stride = 15s - 2s overlap)
-            let strideDuration = 13.0
-            let strideSamples = Int(strideDuration * 16000.0)  // Exact samples: 208,000
-            confirmationSampleOffset += strideSamples
+            // VAD-driven: Don't use fixed stride, just track absolute positions from timestamps
+            // The sample offset is already being updated correctly by the timestamp conversion
             
             // Display confirmation text
             let tokenIds = mergedTokens.map { $0.token }

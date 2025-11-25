@@ -12,26 +12,37 @@ import AVFoundation
 /// 15s chunks with 2s overlap, stateless processing
 class StreamingAudioProcessor: NSObject, @unchecked Sendable {
     
-    // Dual-mode configuration for low latency
-    private let hypothesisChunkDuration: TimeInterval = 5.0   // 5s chunks for reasonable latency
-    private let confirmationChunkDuration: TimeInterval = 15.0 // 15s accurate chunks for final text
-    private let overlapDuration: TimeInterval = 1.0  // 1s overlap for hypothesis
+    // Dual-mode configuration - now VAD-driven instead of fixed windows
+    private let maxSegmentDuration: TimeInterval = 30.0  // Maximum segment before forced split
+    private let minSilenceDuration: TimeInterval = 0.7   // Increased from 0.3 - require longer silence to end segment
+    private let minConfirmationDuration: TimeInterval = 10.0  // Accumulate segments until 10s before confirming
+    private let maxPauseBetweenSegments: TimeInterval = 2.0   // Max pause to still consider same utterance
+    private let hypothesisUpdateInterval: TimeInterval = 0.5  // Update hypothesis every 0.5s (was 2.0s)
     private let sampleRate: Double = 16000.0
     private let channelCount: Int = 1
     
-    // Simple accumulation buffer (not ring buffer)
+    // Simple accumulation buffer
     private var sampleBuffer: [Float] = []
     private var bufferStartSample: Int = 0  // Absolute sample position of buffer[0]
-    private var lastHypothesisPosition: Int = 0  // Track where last hypothesis chunk was sent
-    private var lastConfirmationPosition: Int = 0  // Track where last confirmation chunk was sent
+    
+    // VAD-driven state tracking
+    private var currentSegmentStart: Int? = nil  // B (begin) position
+    private var lastHypothesisUpdate: Int = 0     // Last hypothesis sent
+    private var lastConfirmedPosition: Int = 0    // Last confirmed segment end
+    private var accumulatedSegments: [(begin: Int, end: Int)] = []  // Segments waiting for confirmation
     
     // Audio engine components
     private var audioEngine: AVAudioEngine?
     private var inputNode: AVAudioInputNode?
     
-    // Callbacks for processed audio chunks
-    private var onHypothesisChunk: (@Sendable (Data) -> Void)?
-    private var onConfirmationChunk: (@Sendable (Data) -> Void)?
+    // Callbacks for processed audio chunks (now includes start sample position)
+    private var onHypothesisChunk: (@Sendable (Data, Int) -> Void)?  // (wavData, startSample)
+    private var onConfirmationChunk: (@Sendable (Data, Int) -> Void)?  // (wavData, startSample)
+    
+    // Voice Activity Detection
+    private let vad = VoiceActivityDetector()
+    private let useSpeechBoundaries: Bool = true  // Enable boundary detection
+    private let boundarySearchWindow: Double = 1.0  // Search ±1s around target
     
     // State
     private var isRecording = false
@@ -43,11 +54,11 @@ class StreamingAudioProcessor: NSObject, @unchecked Sendable {
     
     /// Start streaming audio processing with dual-mode chunks
     /// - Parameters:
-    ///   - onHypothesis: Callback for fast 3s chunks (low latency preview)
-    ///   - onConfirmation: Callback for accurate 15s chunks (final transcription)
+    ///   - onHypothesis: Callback for ongoing segments (wavData, startSample)
+    ///   - onConfirmation: Callback for complete segments (wavData, startSample)
     public func startStreaming(
-        onHypothesis: @escaping @Sendable (Data) -> Void,
-        onConfirmation: @escaping @Sendable (Data) -> Void
+        onHypothesis: @escaping @Sendable (Data, Int) -> Void,
+        onConfirmation: @escaping @Sendable (Data, Int) -> Void
     ) throws {
         guard !isRecording else { return }
         
@@ -55,11 +66,14 @@ class StreamingAudioProcessor: NSObject, @unchecked Sendable {
         self.onConfirmationChunk = onConfirmation
         self.isRecording = true
         
-        // Reset buffer
+        // Reset buffer and VAD
         sampleBuffer = []
         bufferStartSample = 0
-        lastHypothesisPosition = 0
-        lastConfirmationPosition = 0
+        currentSegmentStart = nil
+        lastHypothesisUpdate = 0
+        lastConfirmedPosition = 0
+        accumulatedSegments = []
+        vad.reset()
         
         // Setup audio engine
         try setupAudioEngine()
@@ -134,66 +148,165 @@ class StreamingAudioProcessor: NSObject, @unchecked Sendable {
         processChunks()
     }
     
-    /// Process chunks in dual mode: fast hypothesis + accurate confirmation
-    /// Both modes read from the same buffer without consuming it
+    /// Process chunks using VAD-driven segmentation with accumulation
+    /// Accumulates multiple short segments until enough context before confirming
     private func processChunks() {
-        let hypothesisMinSize = Int(5.0 * sampleRate)  // 80,000 samples (5s minimum for first hypothesis)
-        let confirmationSize = Int(confirmationChunkDuration * sampleRate)  // 240,000 samples (15s)
-        let hypothesisStride = Int(4.0 * sampleRate)  // 64,000 samples (4s stride for update frequency)
-        let confirmationStride = Int(13.0 * sampleRate)  // 208,000 samples (13s stride)
-        
         let totalSamplesCollected = bufferStartSample + sampleBuffer.count
+        let hypothesisUpdateSamples = Int(hypothesisUpdateInterval * sampleRate)
         
-        // Process confirmation chunks (15s) first - this is the authoritative base
-        while totalSamplesCollected - lastConfirmationPosition >= confirmationSize {
-            let startInBuffer = lastConfirmationPosition - bufferStartSample
+        // Detect speech segments in current buffer
+        let segments = vad.detectSpeechSegments(
+            sampleBuffer,
+            sampleRate: sampleRate,
+            minSilenceDuration: minSilenceDuration,
+            minSegmentDuration: 0.5
+        )
+        
+        // Process new complete segments - add to accumulation
+        var hasNewSegments = false
+        for segment in segments {
+            let absoluteBegin = bufferStartSample + segment.beginSample
+            let absoluteEnd = bufferStartSample + segment.endSample
             
-            if startInBuffer >= 0 && startInBuffer + confirmationSize <= sampleBuffer.count {
-                let chunk = Array(sampleBuffer[startInBuffer..<(startInBuffer + confirmationSize)])
-                
-                if let wavData = convertToWAV(samples: chunk) {
-                    onConfirmationChunk?(wavData)
+            // Skip if we've already confirmed past this segment
+            if absoluteEnd <= lastConfirmedPosition {
+                continue
+            }
+            
+            if segment.isComplete {
+                // Complete segment (B→E detected) - add to accumulation if not already added
+                let alreadyAdded = accumulatedSegments.contains { $0.begin == absoluteBegin && $0.end == absoluteEnd }
+                if !alreadyAdded {
+                    accumulatedSegments.append((begin: absoluteBegin, end: absoluteEnd))
+                    hasNewSegments = true
+                    print("➕ Added segment to accumulation: \(accumulatedSegments.count) segments, latest ended at \(String(format: "%.2f", Double(absoluteEnd) / sampleRate))s")
                 }
-                
-                lastConfirmationPosition += confirmationStride
-                
-                // Reset hypothesis position to read AFTER this confirmation chunk
-                // This prevents hypothesis from reading already-confirmed audio
-                if lastHypothesisPosition < lastConfirmationPosition {
-                    lastHypothesisPosition = lastConfirmationPosition
-                }
-            } else {
-                break
             }
         }
         
-        // Process hypothesis chunks - CUMULATIVE from confirmation position
-        // Hypothesis shows growing preview of all audio after confirmation
-        let hypothesisStart = lastConfirmationPosition
-        let availableSamples = totalSamplesCollected - hypothesisStart
-        
-        // Only emit hypothesis if we have enough samples AND it's been at least 4s since last update
-        if availableSamples >= hypothesisMinSize && 
-           totalSamplesCollected - lastHypothesisPosition >= hypothesisStride {
+        // Check if we should confirm accumulated segments
+        // Only check when we have new segments or periodically
+        if !accumulatedSegments.isEmpty && hasNewSegments,
+           let firstAccumulated = accumulatedSegments.first,
+           let lastAccumulated = accumulatedSegments.last {
             
-            let startInBuffer = hypothesisStart - bufferStartSample
-            let endInBuffer = startInBuffer + availableSamples
+            let accumulatedDuration = Double(lastAccumulated.end - firstAccumulated.begin) / sampleRate
+            let timeSinceLastSegment = Double(totalSamplesCollected - lastAccumulated.end) / sampleRate
             
-            if startInBuffer >= 0 && endInBuffer <= sampleBuffer.count {
-                // Send ALL samples from confirmation position to current position (cumulative)
-                let chunk = Array(sampleBuffer[startInBuffer..<endInBuffer])
+            // Confirm if:
+            // 1. Accumulated enough duration (10s), OR
+            // 2. Long pause after last segment (2s of silence), OR
+            // 3. Too many segments accumulated (safety)
+            let hasEnoughDuration = accumulatedDuration >= minConfirmationDuration
+            let hasLongPause = timeSinceLastSegment >= maxPauseBetweenSegments
+            let tooManySegments = accumulatedSegments.count >= 5
+            
+            let shouldConfirm = hasEnoughDuration || hasLongPause || tooManySegments
+            
+            print("🔍 Accumulation check: duration=\(String(format: "%.1f", accumulatedDuration))s, pauseSince=\(String(format: "%.2f", timeSinceLastSegment))s, segments=\(accumulatedSegments.count)")
+            
+            if shouldConfirm {
+                let reason = hasEnoughDuration ? "duration" : (hasLongPause ? "long pause" : "too many segments")
+                print("✅ CONFIRMATION: Sending \(accumulatedSegments.count) segments [\(String(format: "%.1f", accumulatedDuration))s, reason=\(reason)]")
                 
-                if let wavData = convertToWAV(samples: chunk) {
-                    onHypothesisChunk?(wavData)
+                // Send accumulated segments as one confirmation chunk
+                let startInBuffer = firstAccumulated.begin - bufferStartSample
+                let endInBuffer = lastAccumulated.end - bufferStartSample
+                
+                if startInBuffer >= 0 && endInBuffer <= sampleBuffer.count {
+                    let chunk = Array(sampleBuffer[startInBuffer..<endInBuffer])
+                    let absoluteStart = firstAccumulated.begin
+                    let chunkDuration = Double(chunk.count) / sampleRate
+                    
+                    print("📤 Sending confirmation chunk: \(chunk.count) samples (\(String(format: "%.2f", chunkDuration))s)")
+                    
+                    if let wavData = convertToWAV(samples: chunk) {
+                        onConfirmationChunk?(wavData, absoluteStart)
+                    }
+                    
+                    // Update positions and clear accumulation
+                    lastConfirmedPosition = lastAccumulated.end
+                    lastHypothesisUpdate = lastAccumulated.end
+                    accumulatedSegments = []
+                    currentSegmentStart = nil
                 }
-                
-                lastHypothesisPosition = totalSamplesCollected
             }
         }
         
-        // Trim old samples from buffer to prevent unbounded growth
-        // Only trim samples that BOTH modes are done with
-        let oldestNeededPosition = min(lastConfirmationPosition, lastConfirmationPosition)
+        // Check for ongoing segments to send as HYPOTHESIS
+        for segment in segments {
+            let absoluteBegin = bufferStartSample + segment.beginSample
+            let absoluteEnd = bufferStartSample + segment.endSample
+            
+            if absoluteEnd <= lastConfirmedPosition {
+                continue
+            }
+            
+            if !segment.isComplete {
+                // Ongoing segment (B detected, no E yet) - send as HYPOTHESIS
+                // Include accumulated segments + current ongoing segment
+                if totalSamplesCollected - lastHypothesisUpdate >= hypothesisUpdateSamples {
+                    let hypothesisStart: Int
+                    if let firstAccumulated = accumulatedSegments.first {
+                        hypothesisStart = firstAccumulated.begin
+                    } else {
+                        hypothesisStart = absoluteBegin
+                    }
+                    
+                    let startInBuffer = hypothesisStart - bufferStartSample
+                    let endInBuffer = segment.endSample
+                    
+                    if startInBuffer >= 0 && endInBuffer <= sampleBuffer.count {
+                        let chunk = Array(sampleBuffer[startInBuffer..<endInBuffer])
+                        let absoluteStart = hypothesisStart
+                        let duration = Double(absoluteEnd - hypothesisStart) / sampleRate
+                        
+                        let (hasSpeech, confidence) = vad.detectWithConfidence(chunk)
+                        if hasSpeech {
+                            if let wavData = convertToWAV(samples: chunk) {
+                                onHypothesisChunk?(wavData, absoluteStart)
+                            }
+                            
+                            let segCount = accumulatedSegments.count + 1
+                            print("💭 HYPOTHESIS: \(segCount) segment(s) [\(String(format: "%.1f", duration))s, conf=\(String(format: "%.2f", confidence))]")
+                            
+                            lastHypothesisUpdate = totalSamplesCollected
+                            if currentSegmentStart == nil {
+                                currentSegmentStart = hypothesisStart
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        
+        // Handle very long accumulated duration (force confirmation)
+        if let firstAccumulated = accumulatedSegments.first {
+            let accumulatedDuration = Double(totalSamplesCollected - firstAccumulated.begin) / sampleRate
+            if accumulatedDuration > maxSegmentDuration {
+                print("⚠️ Accumulated duration too long (\(String(format: "%.1f", accumulatedDuration))s), forcing confirmation")
+                
+                guard let lastAccumulated = accumulatedSegments.last else { return }
+                let startInBuffer = firstAccumulated.begin - bufferStartSample
+                let endInBuffer = lastAccumulated.end - bufferStartSample
+                
+                if startInBuffer >= 0 && endInBuffer <= sampleBuffer.count {
+                    let chunk = Array(sampleBuffer[startInBuffer..<endInBuffer])
+                    
+                    if let wavData = convertToWAV(samples: chunk) {
+                        onConfirmationChunk?(wavData, firstAccumulated.begin)
+                    }
+                    
+                    lastConfirmedPosition = lastAccumulated.end
+                    lastHypothesisUpdate = lastAccumulated.end
+                    accumulatedSegments = []
+                    currentSegmentStart = nil
+                }
+            }
+        }
+        
+        // Trim old samples from buffer
+        let oldestNeededPosition = lastConfirmedPosition
         let samplesToTrim = oldestNeededPosition - bufferStartSample
         
         if samplesToTrim > 0 && samplesToTrim < sampleBuffer.count {
