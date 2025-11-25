@@ -199,8 +199,12 @@ class TranscriptionService: @unchecked Sendable {
     
     /// Start real-time streaming transcription with sliding window and KV cache reuse
     /// - Parameters:
-    ///   - onUpdate: Callback invoked with cumulative transcription updates
-    public func startStreamingTranscription(onUpdate: @escaping @Sendable (String) -> Void) throws {
+    ///   - onUpdate: Callback invoked with cumulative transcription updates (plain text)
+    ///   - onAttributedUpdate: Optional callback for styled text with gray hypothesis
+    public func startStreamingTranscription(
+        onUpdate: @escaping @Sendable (String) -> Void,
+        onAttributedUpdate: (@Sendable (AttributedString) -> Void)? = nil
+    ) throws {
         guard !streamingCoordinator.isCurrentlyStreaming else {
             throw TranscriptionError.alreadyStreaming
         }
@@ -229,7 +233,8 @@ class TranscriptionService: @unchecked Sendable {
         try streamingCoordinator.startStreaming(
             model: modelService,
             audioSource: audioSource,
-            onUpdate: onUpdate
+            onUpdate: onUpdate,
+            onAttributedUpdate: onAttributedUpdate
         )
         
         print("TranscriptionService: ✅ Started streaming transcription")

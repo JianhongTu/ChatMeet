@@ -13,6 +13,15 @@ public protocol AudioSource {
     /// - Parameter onChunk: Callback invoked with each audio chunk
     func start(onChunk: @escaping @Sendable (AudioChunk) -> Void) throws
     
+    /// Start streaming with dual-mode chunks (hypothesis + confirmation)
+    /// - Parameters:
+    ///   - onHypothesis: Fast 3s chunks for low-latency preview
+    ///   - onConfirmation: Accurate 15s chunks for final transcription
+    func startDualMode(
+        onHypothesis: @escaping @Sendable (AudioChunk) -> Void,
+        onConfirmation: @escaping @Sendable (AudioChunk) -> Void
+    ) throws
+    
     /// Stop capturing/providing audio
     func stop()
     
@@ -62,30 +71,60 @@ public class LiveAudioSource: NSObject, AudioSource, @unchecked Sendable {
         startTime = Date()
         processor = StreamingAudioProcessor()
         
-        // Convert StreamingAudioProcessor's Data chunks to AudioChunk
-        try processor?.startStreaming { [weak self] audioData in
-            guard let self = self, let startTime = self.startTime else { return }
-            
-            // Extract samples from WAV data
-            do {
-                let samples = try AudioPreprocessor.extractPCMSamples(from: audioData)
-                let currentTime = Date().timeIntervalSince(startTime)
-                let duration = Double(samples.count) / Double(self.sampleRate)
-                
-                // Create AudioChunk
-                let chunk = AudioChunk(
-                    samples: samples,
-                    startTime: max(0, currentTime - duration),
-                    endTime: currentTime,
-                    overlapWithPrevious: 0,  // StreamingAudioProcessor handles overlap internally
-                    overlapWithNext: 0,
-                    sampleRate: self.sampleRate
-                )
-                
-                onChunk(chunk)
-            } catch {
-                print("LiveAudioSource: ⚠️ Failed to process chunk: \(error)")
+        // Use dual mode with same callback for both (legacy compatibility)
+        try processor?.startStreaming(
+            onHypothesis: { [weak self] audioData in
+                self?.convertAndEmit(audioData: audioData, onChunk: onChunk)
+            },
+            onConfirmation: { [weak self] audioData in
+                self?.convertAndEmit(audioData: audioData, onChunk: onChunk)
             }
+        )
+    }
+    
+    public func startDualMode(
+        onHypothesis: @escaping @Sendable (AudioChunk) -> Void,
+        onConfirmation: @escaping @Sendable (AudioChunk) -> Void
+    ) throws {
+        guard !_isActive else { return }
+        
+        _isActive = true
+        startTime = Date()
+        processor = StreamingAudioProcessor()
+        
+        // Dual mode with separate callbacks
+        try processor?.startStreaming(
+            onHypothesis: { [weak self] audioData in
+                self?.convertAndEmit(audioData: audioData, onChunk: onHypothesis)
+            },
+            onConfirmation: { [weak self] audioData in
+                self?.convertAndEmit(audioData: audioData, onChunk: onConfirmation)
+            }
+        )
+    }
+    
+    private func convertAndEmit(audioData: Data, onChunk: @escaping @Sendable (AudioChunk) -> Void) {
+        guard let startTime = self.startTime else { return }
+        
+        // Extract samples from WAV data
+        do {
+            let samples = try AudioPreprocessor.extractPCMSamples(from: audioData)
+            let currentTime = Date().timeIntervalSince(startTime)
+            let duration = Double(samples.count) / Double(self.sampleRate)
+            
+            // Create AudioChunk
+            let chunk = AudioChunk(
+                samples: samples,
+                startTime: max(0, currentTime - duration),
+                endTime: currentTime,
+                overlapWithPrevious: 0,
+                overlapWithNext: 0,
+                sampleRate: self.sampleRate
+            )
+            
+            onChunk(chunk)
+        } catch {
+            print("LiveAudioSource: ⚠️ Failed to process chunk: \(error)")
         }
     }
     

@@ -8,50 +8,58 @@
 import Foundation
 import AVFoundation
 
-/// Processes audio in real-time using a sliding window strategy with ring buffer
+/// Processes audio in real-time using FluidAudio strategy
+/// 15s chunks with 2s overlap, stateless processing
 class StreamingAudioProcessor: NSObject, @unchecked Sendable {
     
-    // Configuration
-    private let chunkDuration: TimeInterval = 5.0  // 5 second chunks
+    // Dual-mode configuration for low latency
+    private let hypothesisChunkDuration: TimeInterval = 5.0   // 5s chunks for reasonable latency
+    private let confirmationChunkDuration: TimeInterval = 15.0 // 15s accurate chunks for final text
+    private let overlapDuration: TimeInterval = 1.0  // 1s overlap for hypothesis
     private let sampleRate: Double = 16000.0
     private let channelCount: Int = 1
     
-    // Ring buffer for audio samples
-    private var audioRingBuffer: [Float] = []
-    private let maxBufferSize: Int  // Maximum samples in buffer
-    private var bufferWritePosition: Int = 0
-    private var totalSamplesWritten: Int = 0
+    // Simple accumulation buffer (not ring buffer)
+    private var sampleBuffer: [Float] = []
+    private var bufferStartSample: Int = 0  // Absolute sample position of buffer[0]
+    private var lastHypothesisPosition: Int = 0  // Track where last hypothesis chunk was sent
+    private var lastConfirmationPosition: Int = 0  // Track where last confirmation chunk was sent
     
     // Audio engine components
     private var audioEngine: AVAudioEngine?
     private var inputNode: AVAudioInputNode?
     
-    // Callback for processed audio chunks
-    private var onAudioChunk: (@Sendable (Data) -> Void)?
+    // Callbacks for processed audio chunks
+    private var onHypothesisChunk: (@Sendable (Data) -> Void)?
+    private var onConfirmationChunk: (@Sendable (Data) -> Void)?
     
     // State
     private var isRecording = false
     private var processingQueue = DispatchQueue(label: "com.chatmeet.audioprocessing", qos: .userInitiated)
     
     override init() {
-        // Calculate buffer size for 30 seconds (matching Whisper's input length)
-        self.maxBufferSize = Int(30.0 * sampleRate)
-        self.audioRingBuffer = [Float](repeating: 0, count: maxBufferSize)
         super.init()
     }
     
-    /// Start streaming audio processing
-    /// - Parameter onChunk: Callback invoked with each 5-second audio chunk
-    public func startStreaming(onChunk: @escaping @Sendable (Data) -> Void) throws {
+    /// Start streaming audio processing with dual-mode chunks
+    /// - Parameters:
+    ///   - onHypothesis: Callback for fast 3s chunks (low latency preview)
+    ///   - onConfirmation: Callback for accurate 15s chunks (final transcription)
+    public func startStreaming(
+        onHypothesis: @escaping @Sendable (Data) -> Void,
+        onConfirmation: @escaping @Sendable (Data) -> Void
+    ) throws {
         guard !isRecording else { return }
         
-        self.onAudioChunk = onChunk
+        self.onHypothesisChunk = onHypothesis
+        self.onConfirmationChunk = onConfirmation
         self.isRecording = true
         
         // Reset buffer
-        audioRingBuffer = [Float](repeating: 0, count: maxBufferSize)
-        bufferWritePosition = 0
-        totalSamplesWritten = 0
+        sampleBuffer = []
+        bufferStartSample = 0
+        lastHypothesisPosition = 0
+        lastConfirmationPosition = 0
         
         // Setup audio engine
         try setupAudioEngine()
@@ -105,7 +113,7 @@ class StreamingAudioProcessor: NSObject, @unchecked Sendable {
         try engine.start()
     }
     
-    /// Process incoming audio buffer and write to ring buffer
+    /// Process incoming audio buffer and accumulate samples
     private func processAudioBuffer(_ buffer: AVAudioPCMBuffer, inputFormat: AVAudioFormat, outputFormat: AVAudioFormat) {
         guard isRecording else { return }
         
@@ -119,59 +127,79 @@ class StreamingAudioProcessor: NSObject, @unchecked Sendable {
         let frameLength = Int(convertedBuffer.frameLength)
         let samples = Array(UnsafeBufferPointer(start: channelData[0], count: frameLength))
         
-        // Write samples to ring buffer
-        writeToRingBuffer(samples)
+        // Accumulate samples in buffer
+        sampleBuffer.append(contentsOf: samples)
         
-        // Check if we should process a chunk
-        let chunkSize = Int(chunkDuration * sampleRate)
-        if totalSamplesWritten >= chunkSize && totalSamplesWritten % chunkSize < samples.count {
-            processChunk()
-        }
+        // Process chunks when we have enough
+        processChunks()
     }
     
-    /// Write samples to ring buffer with wraparound
-    private func writeToRingBuffer(_ samples: [Float]) {
-        for sample in samples {
-            audioRingBuffer[bufferWritePosition] = sample
-            bufferWritePosition = (bufferWritePosition + 1) % maxBufferSize
-            totalSamplesWritten += 1
-        }
-    }
-    
-    /// Process a chunk of audio and invoke callback
-    private func processChunk() {
-        // Extract the last 30 seconds from ring buffer for Whisper
-        let chunkSamples = extractCurrentWindow()
+    /// Process chunks in dual mode: fast hypothesis + accurate confirmation
+    /// Both modes read from the same buffer without consuming it
+    private func processChunks() {
+        let hypothesisMinSize = Int(5.0 * sampleRate)  // 80,000 samples (5s minimum for first hypothesis)
+        let confirmationSize = Int(confirmationChunkDuration * sampleRate)  // 240,000 samples (15s)
+        let hypothesisStride = Int(4.0 * sampleRate)  // 64,000 samples (4s stride for update frequency)
+        let confirmationStride = Int(13.0 * sampleRate)  // 208,000 samples (13s stride)
         
-        // Convert to WAV format
-        guard let wavData = convertToWAV(samples: chunkSamples) else {
-            return
-        }
+        let totalSamplesCollected = bufferStartSample + sampleBuffer.count
         
-        // Invoke callback with audio chunk
-        onAudioChunk?(wavData)
-    }
-    
-    /// Extract current 30-second window from ring buffer
-    private func extractCurrentWindow() -> [Float] {
-        let windowSize = min(totalSamplesWritten, maxBufferSize)
-        var samples = [Float](repeating: 0, count: windowSize)
-        
-        // Read from ring buffer accounting for wraparound
-        if totalSamplesWritten < maxBufferSize {
-            // Buffer hasn't wrapped yet, just copy what we've written so far
-            // The write position indicates how many samples we have
-            samples = Array(audioRingBuffer.prefix(bufferWritePosition))
-        } else {
-            // Buffer has wrapped, need to reconstruct order
-            // The oldest sample is at bufferWritePosition, and we go forward
-            for i in 0..<windowSize {
-                let ringIndex = (bufferWritePosition + i) % maxBufferSize
-                samples[i] = audioRingBuffer[ringIndex]
+        // Process confirmation chunks (15s) first - this is the authoritative base
+        while totalSamplesCollected - lastConfirmationPosition >= confirmationSize {
+            let startInBuffer = lastConfirmationPosition - bufferStartSample
+            
+            if startInBuffer >= 0 && startInBuffer + confirmationSize <= sampleBuffer.count {
+                let chunk = Array(sampleBuffer[startInBuffer..<(startInBuffer + confirmationSize)])
+                
+                if let wavData = convertToWAV(samples: chunk) {
+                    onConfirmationChunk?(wavData)
+                }
+                
+                lastConfirmationPosition += confirmationStride
+                
+                // Reset hypothesis position to read AFTER this confirmation chunk
+                // This prevents hypothesis from reading already-confirmed audio
+                if lastHypothesisPosition < lastConfirmationPosition {
+                    lastHypothesisPosition = lastConfirmationPosition
+                }
+            } else {
+                break
             }
         }
         
-        return samples
+        // Process hypothesis chunks - CUMULATIVE from confirmation position
+        // Hypothesis shows growing preview of all audio after confirmation
+        let hypothesisStart = lastConfirmationPosition
+        let availableSamples = totalSamplesCollected - hypothesisStart
+        
+        // Only emit hypothesis if we have enough samples AND it's been at least 4s since last update
+        if availableSamples >= hypothesisMinSize && 
+           totalSamplesCollected - lastHypothesisPosition >= hypothesisStride {
+            
+            let startInBuffer = hypothesisStart - bufferStartSample
+            let endInBuffer = startInBuffer + availableSamples
+            
+            if startInBuffer >= 0 && endInBuffer <= sampleBuffer.count {
+                // Send ALL samples from confirmation position to current position (cumulative)
+                let chunk = Array(sampleBuffer[startInBuffer..<endInBuffer])
+                
+                if let wavData = convertToWAV(samples: chunk) {
+                    onHypothesisChunk?(wavData)
+                }
+                
+                lastHypothesisPosition = totalSamplesCollected
+            }
+        }
+        
+        // Trim old samples from buffer to prevent unbounded growth
+        // Only trim samples that BOTH modes are done with
+        let oldestNeededPosition = min(lastConfirmationPosition, lastConfirmationPosition)
+        let samplesToTrim = oldestNeededPosition - bufferStartSample
+        
+        if samplesToTrim > 0 && samplesToTrim < sampleBuffer.count {
+            sampleBuffer.removeFirst(samplesToTrim)
+            bufferStartSample += samplesToTrim
+        }
     }
     
     /// Convert audio format using AVAudioConverter
@@ -219,8 +247,8 @@ class StreamingAudioProcessor: NSObject, @unchecked Sendable {
     }
     
     /// Get current buffer status
-    public func getBufferStatus() -> (samplesInBuffer: Int, totalProcessed: Int) {
-        return (min(totalSamplesWritten, maxBufferSize), totalSamplesWritten)
+    public func getBufferStatus() -> (samplesInBuffer: Int, absolutePosition: Int) {
+        return (sampleBuffer.count, bufferStartSample)
     }
 }
 

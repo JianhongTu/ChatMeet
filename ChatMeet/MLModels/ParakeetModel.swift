@@ -72,12 +72,21 @@ class ParakeetModel: @unchecked Sendable {
         return currentBackend
     }
     
+    /// Decode token IDs to text using the loaded tokenizer
+    /// - Parameter tokens: Array of token IDs to decode
+    /// - Returns: Decoded text string
+    public func decodeTokens(_ tokens: [Int]) -> String {
+        guard let tokenizer = tokenizer else {
+            return ""
+        }
+        let text = tokenizer.decode(tokens: tokens)
+        return cleanParakeetArtifacts(text)
+    }
+    
     /// Set the compute backend for model inference
     /// - Parameter backend: The desired compute backend
     /// - Note: Models will be reloaded automatically if already loaded
     public func setComputeBackend(_ backend: ComputeBackend) async throws {
-        print("ParakeetModel: 🔄 Switching compute backend to \(backend.description)")
-        
         // Store the new backend
         currentBackend = backend
         
@@ -91,8 +100,6 @@ class ParakeetModel: @unchecked Sendable {
     /// Load all Parakeet Core ML models and tokenizer
     /// This should be called after user selects the Parakeet model
     public func loadModel() async throws {
-        print("ParakeetModel: 🔄 Starting model loading with \(currentBackend.description) backend...")
-        
         // Configure Core ML with selected compute backend
         let config = MLModelConfiguration()
         config.computeUnits = currentBackend.mlComputeUnits
@@ -106,7 +113,6 @@ class ParakeetModel: @unchecked Sendable {
         try await loadTokenizer()
         
         isReady = true
-        print("ParakeetModel: ✅ All models loaded successfully")
     }
     
     /// Unload all models to free memory
@@ -194,7 +200,6 @@ class ParakeetModel: @unchecked Sendable {
         let bundleURL = Bundle.main.bundleURL.deletingLastPathComponent().deletingLastPathComponent()
         let modelsPath = bundleURL.appendingPathComponent("ChatMeet/MLModels/\(named).mlpackage")
         if FileManager.default.fileExists(atPath: modelsPath.path) {
-            print("ParakeetModel: ✓ Found model in MLModels/ directory: \(modelsPath.path)")
             return modelsPath
         }
         
@@ -303,6 +308,64 @@ class ParakeetModel: @unchecked Sendable {
         
         // Clean Parakeet artifacts before returning
         return cleanParakeetArtifacts(transcription)
+    }
+    
+    /// Transcribe audio chunk and return tokens with frame positions for streaming
+    /// This method exposes token-level data needed for frame-aligned token merging
+    /// - Parameters:
+    ///   - audioData: Raw audio data in WAV format (16kHz, mono, PCM)
+    ///   - onProgress: Optional callback for real-time token streaming
+    /// - Returns: Tuple of (tokens: [Int], tokenStartFrames: [Int], confidences: [Float])
+    public func transcribeChunkWithTokens(
+        _ audioData: Data,
+        onProgress: (@Sendable (String) -> Void)? = nil
+    ) async throws -> (tokens: [Int], tokenStartFrames: [Int], confidences: [Float]) {
+        guard isReady else {
+            throw ParakeetError.modelNotLoaded
+        }
+        
+        guard let preprocessor = preprocessorModel,
+              let encoder = encoderModel,
+              let decoderJoiner = decoderJoinerModel,
+              let tokenizer = tokenizer else {
+            throw ParakeetError.modelNotLoaded
+        }
+        
+        // 1. Extract PCM samples from WAV data
+        let samples = try AudioPreprocessor.extractPCMSamples(from: audioData)
+        
+        // Pad/trim to expected length (30 seconds = 480,000 samples at 16kHz)
+        let expectedSamples = 480000
+        let paddedSamples = AudioPreprocessor.padOrTrim(samples, to: expectedSamples)
+        
+        #if DEBUG
+        let originalDuration = Double(samples.count) / 16000.0
+        print("ParakeetModel: 🎤 transcribeChunkWithTokens - Original: \(String(format: "%.2f", originalDuration))s (\(samples.count) samples)")
+        #endif
+        
+        // 2. Run preprocessor (PCM -> mel spectrogram)
+        let (melFeatures, featureLengths) = try runPreprocessor(preprocessor, audioSamples: paddedSamples)
+        
+        // Create featureLengths array for encoder
+        let lengthArray = try MLMultiArray(shape: [1], dataType: .int32)
+        lengthArray[0] = NSNumber(value: featureLengths)
+        
+        // 3. Run encoder (mel -> acoustic embeddings)
+        let acousticEmbeddings = try runEncoder(encoder, melFeatures: melFeatures, featureLengths: lengthArray)
+        
+        // 4. Run greedy decoding with frame tracking
+        let (tokenIds, tokenFrames, tokenConfidences) = try await runGreedyDecodingWithFrames(
+            decoderJoiner: decoderJoiner,
+            acousticEmbeddings: acousticEmbeddings,
+            onProgress: onProgress,
+            tokenizer: tokenizer
+        )
+        
+        #if DEBUG
+        print("ParakeetModel: 📝 Generated \(tokenIds.count) tokens with frame positions")
+        #endif
+        
+        return (tokens: tokenIds, tokenStartFrames: tokenFrames, confidences: tokenConfidences)
     }
     
     // MARK: - Helper Methods
@@ -767,6 +830,145 @@ class ParakeetModel: @unchecked Sendable {
         return ySequence
     }
     
+    /// Run greedy decoding with frame tracking for token merging
+    /// - Parameters:
+    ///   - decoderJoiner: Combined decoder+joiner MLModel with argmax outputs
+    ///   - acousticEmbeddings: Acoustic embeddings from encoder [B, D, T]
+    ///   - onProgress: Optional progress callback
+    ///   - tokenizer: Tokenizer for decoding
+    /// - Returns: Tuple of (tokens, tokenStartFrames, confidences)
+    private func runGreedyDecodingWithFrames(
+        decoderJoiner: MLModel,
+        acousticEmbeddings: MLMultiArray,
+        onProgress: (@Sendable (String) -> Void)?,
+        tokenizer: Tokenizer
+    ) async throws -> (tokens: [Int], tokenStartFrames: [Int], confidences: [Float]) {
+        // Convert MLMultiArray to MLShapedArray for efficient slicing
+        let shapedEmbeddings = MLShapedArray<Float>(acousticEmbeddings)
+        let timeSteps = shapedEmbeddings.shape[2]  // [B, D, T]
+        
+        let blankId = 8192
+        let maxSymbols = 10
+        let durations = [0, 1, 2, 3, 4]
+        
+        var tokens: [Int] = []
+        var tokenStartFrames: [Int] = []
+        var tokenConfidences: [Float] = []
+        var lastToken: Int? = nil
+        
+        // Initialize decoder LSTM states
+        let numLayers = 2
+        let batchSize = 1
+        let hiddenSize = 640
+        
+        var stateH = MLMultiArray(MLShapedArray<Float>(repeating: 0.0, shape: [numLayers, batchSize, hiddenSize]))
+        var stateC = MLMultiArray(MLShapedArray<Float>(repeating: 0.0, shape: [numLayers, batchSize, hiddenSize]))
+        
+        var timeIdx = 0
+        var iterationCount = 0
+        
+        // Streaming optimizations
+        var lastUpdateTokenCount = 0
+        let updateInterval = 10
+        let yieldInterval = 20
+        
+        print("ParakeetModel: Starting greedy decoding with frame tracking (T=\(timeSteps))")
+        
+        while timeIdx < timeSteps {
+            iterationCount += 1
+            
+            #if DEBUG
+            if iterationCount % 100 == 0 {
+                print("ParakeetModel: Decoding progress - timeIdx: \(timeIdx)/\(timeSteps), tokens: \(tokens.count)")
+            }
+            #endif
+            
+            if onProgress != nil && iterationCount % yieldInterval == 0 {
+                await Task.yield()
+            }
+            
+            // Extract current frame
+            let frameSlice = shapedEmbeddings[0..., 0..., timeIdx...timeIdx]
+            let encoderStep = MLMultiArray(frameSlice)
+            
+            var symbolsAdded = 0
+            var needLoop = true
+            var skip = 0
+            
+            while needLoop && symbolsAdded < maxSymbols {
+                let inputToken = lastToken ?? blankId
+                
+                // Run decoder+joiner and get confidence
+                let (k, durationIdx, confidence) = try runDecoderJoinerWithConfidence(
+                    decoderJoiner,
+                    token: inputToken,
+                    encoderStep: encoderStep,
+                    stateH: &stateH,
+                    stateC: &stateC
+                )
+                
+                skip = durations[durationIdx]
+                
+                if k == blankId {
+                    // Blank predicted: advance time
+                    if skip > 0 {
+                        timeIdx += skip
+                    } else {
+                        timeIdx += 1
+                    }
+                    needLoop = false
+                } else {
+                    // Non-blank: record token with its frame position
+                    tokens.append(k)
+                    tokenStartFrames.append(timeIdx)  // Record frame where token was emitted
+                    tokenConfidences.append(confidence)
+                    lastToken = k
+                    
+                    // Stream progress if callback provided
+                    if let onProgress = onProgress,
+                       tokens.count - lastUpdateTokenCount >= updateInterval {
+                        let partialText = tokenizer.decode(tokens: tokens)
+                        let cleanedText = cleanParakeetArtifacts(partialText)
+                        lastUpdateTokenCount = tokens.count
+                        
+                        Task { @MainActor in
+                            onProgress(cleanedText)
+                        }
+                    }
+                    
+                    symbolsAdded += 1
+                    
+                    if skip > 0 {
+                        timeIdx += skip
+                        needLoop = false
+                    } else {
+                        needLoop = true
+                    }
+                }
+            }
+            
+            // If max_symbols hit, advance time
+            if symbolsAdded == maxSymbols && skip == 0 {
+                timeIdx += 1
+            }
+        }
+        
+        // Send final update
+        if let onProgress = onProgress, tokens.count > lastUpdateTokenCount {
+            let finalText = tokenizer.decode(tokens: tokens)
+            let cleanedText = cleanParakeetArtifacts(finalText)
+            Task { @MainActor in
+                onProgress(cleanedText)
+            }
+        }
+        
+        #if DEBUG
+        print("ParakeetModel: Greedy decoding complete (\(tokens.count) tokens, \(tokenStartFrames.count) frames)")
+        #endif
+        
+        return (tokens, tokenStartFrames, tokenConfidences)
+    }
+    
     /// Run combined decoder+joiner on single token with state
     /// - Parameters:
     ///   - decoderJoiner: Combined decoder+joiner MLModel  
@@ -819,6 +1021,91 @@ class ParakeetModel: @unchecked Sendable {
         let durationIdx = duration[[0, 0, 0] as [NSNumber]].intValue
         
         return (k, durationIdx)
+    }
+    
+    /// Run combined decoder+joiner with confidence extraction
+    /// - Parameters:
+    ///   - decoderJoiner: Combined decoder+joiner MLModel
+    ///   - token: Token ID (Int)
+    ///   - encoderStep: Single encoder frame [1, 1024, 1]
+    ///   - stateH: Hidden state (will be updated)
+    ///   - stateC: Cell state (will be updated)
+    /// - Returns: Tuple of (token_id, duration_index, confidence)
+    private func runDecoderJoinerWithConfidence(
+        _ decoderJoiner: MLModel,
+        token: Int,
+        encoderStep: MLMultiArray,
+        stateH: inout MLMultiArray,
+        stateC: inout MLMultiArray
+    ) throws -> (Int, Int, Float) {
+        // Create inputs
+        let targets = try MLMultiArray(shape: [1, 1], dataType: .int32)
+        targets[[0, 0] as [NSNumber]] = NSNumber(value: token)
+        
+        let targetLengths = try MLMultiArray(shape: [1], dataType: .int32)
+        targetLengths[0] = NSNumber(value: 1)
+        
+        let inputFeatures = try MLDictionaryFeatureProvider(dictionary: [
+            "targets": MLFeatureValue(multiArray: targets),
+            "target_lengths": MLFeatureValue(multiArray: targetLengths),
+            "h_in": MLFeatureValue(multiArray: stateH),
+            "c_in": MLFeatureValue(multiArray: stateC),
+            "encoder_step": MLFeatureValue(multiArray: encoderStep)
+        ])
+        
+        let output = try decoderJoiner.prediction(from: inputFeatures)
+        
+        // Extract outputs
+        guard let tokenId = output.featureValue(for: "token_id")?.multiArrayValue,
+              let duration = output.featureValue(for: "duration")?.multiArrayValue,
+              let logits = output.featureValue(for: "logits")?.multiArrayValue else {
+            throw ParakeetError.inferenceFailed("Failed to extract outputs from decoder+joiner")
+        }
+        
+        // Update states
+        if let newStateH = output.featureValue(for: "h_out")?.multiArrayValue {
+            stateH = newStateH
+        }
+        if let newStateC = output.featureValue(for: "c_out")?.multiArrayValue {
+            stateC = newStateC
+        }
+        
+        // Extract scalar values
+        let k = tokenId[[0, 0, 0] as [NSNumber]].intValue
+        let durationIdx = duration[[0, 0, 0] as [NSNumber]].intValue
+        
+        // Calculate confidence from logits
+        // logits shape: [1, 1, vocab_size] where vocab_size = 8198
+        // Apply softmax to get probability, use max probability as confidence
+        let logitsArray = MLShapedArray<Float>(logits)
+        let vocabSize = logitsArray.shape[2]
+        
+        // Find max logit for numerical stability
+        var maxLogit: Float = -Float.infinity
+        for i in 0..<vocabSize {
+            let logitValue = logitsArray[0, 0, i].scalar ?? 0.0
+            if logitValue > maxLogit {
+                maxLogit = logitValue
+            }
+        }
+        
+        // Compute softmax and find probability of predicted token
+        var sumExp: Float = 0.0
+        var tokenProb: Float = 0.0
+        
+        for i in 0..<vocabSize {
+            let logitValue = logitsArray[0, 0, i].scalar ?? 0.0
+            let expValue = exp(logitValue - maxLogit)
+            sumExp += expValue
+            
+            if i == k {
+                tokenProb = expValue
+            }
+        }
+        
+        let confidence = tokenProb / sumExp
+        
+        return (k, durationIdx, confidence)
     }
 }
 

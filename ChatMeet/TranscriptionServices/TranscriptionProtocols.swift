@@ -123,3 +123,48 @@ public struct TranscriptionResult {
         self.metadata = metadata
     }
 }
+
+/// Token with timing and confidence for FluidAudio-style merging
+public struct TokenWindow: Sendable {
+    public let token: Int
+    public let timestamp: Int  // Frame index
+    public let confidence: Float
+    
+    public init(token: Int, timestamp: Int, confidence: Float) {
+        self.token = token
+        self.timestamp = timestamp
+        self.confidence = confidence
+    }
+}
+
+/// Streaming state for Parakeet (stateless with frame tracking)
+public class ParakeetStreamingState {
+    /// Decoder LSTM hidden state [2,1,640]
+    public var stateH: Any?
+    
+    /// Decoder LSTM cell state [2,1,640]
+    public var stateC: Any?
+    
+    /// Last predicted token
+    public var lastToken: Int
+    
+    /// Accumulated tokens from all chunks
+    public var tokens: [Int] = []
+    
+    /// Frame positions for each token (global)
+    public var tokenStartFrames: [Int] = []
+    
+    /// Global frame counter across chunks
+    public var globalFrameCounter: Int = 0
+    
+    public init(blankId: Int = 8192) {
+        self.lastToken = blankId
+    }
+    
+    /// Reset state for new chunk (stateless approach)
+    public func reset(blankId: Int = 8192) {
+        stateH = nil
+        stateC = nil
+        lastToken = blankId
+    }
+}

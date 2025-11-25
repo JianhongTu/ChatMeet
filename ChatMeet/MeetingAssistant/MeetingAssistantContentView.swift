@@ -387,11 +387,14 @@ struct MeetingAssistantContentView: View {
                 Color(uiColor: .systemBackground)
                 #endif
                 
-                TextEditor(text: $viewModel.transcription)
-                    .font(.system(size: 13))
-                    .scrollContentBackground(.hidden)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 8)
+                ScrollView {
+                    Text(viewModel.attributedTranscription)
+                        .font(.system(size: 13))
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 8)
+                        .textSelection(.enabled)
+                }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }

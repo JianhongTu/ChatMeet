@@ -52,7 +52,6 @@ public class AudioPreprocessor {
         do {
             audioFile = try AVAudioFile(forReading: tempURL)
         } catch {
-            print("AudioPreprocessor: Failed to open audio file: \(error)")
             throw AudioPreprocessingError.invalidFormat
         }
         
@@ -63,8 +62,6 @@ public class AudioPreprocessor {
         guard frameCount > 0 else {
             throw AudioPreprocessingError.emptyData
         }
-        
-        print("AudioPreprocessor: Input format - \(fileFormat.sampleRate)Hz, \(fileFormat.channelCount) channels, \(frameCount) frames")
         
         // Create buffer for reading
         guard let buffer = AVAudioPCMBuffer(pcmFormat: fileFormat, frameCapacity: frameCount) else {
@@ -112,12 +109,10 @@ public class AudioPreprocessor {
             converter.convert(to: outputBuffer, error: &error, withInputFrom: inputBlock)
             
             if let error = error {
-                print("AudioPreprocessor: Conversion error: \(error)")
                 throw AudioPreprocessingError.parseError
             }
             
             convertedBuffer = outputBuffer
-            print("AudioPreprocessor: Converted to 16kHz mono, \(convertedBuffer.frameLength) frames")
         } else {
             convertedBuffer = buffer
         }
@@ -130,7 +125,6 @@ public class AudioPreprocessor {
         let sampleCount = Int(convertedBuffer.frameLength)
         let samples = Array(UnsafeBufferPointer(start: channelData[0], count: sampleCount))
         
-        print("AudioPreprocessor: Extracted \(samples.count) samples")
         return samples
     }
     

@@ -14,6 +14,7 @@ class MeetingAssistantViewModel: ObservableObject {
     @Published public var isPlaying: Bool = false
     @Published public var statusMessage: String = "Select a transcription model to begin"
     @Published public var transcription: String = "Transcribed text will appear here..."
+    @Published public var attributedTranscription: AttributedString = AttributedString("Transcribed text will appear here...")  // Styled transcription with gray hypothesis
     @Published public var summaryBulletPoints: [SummaryBulletPoint] = []
     @Published public var summaryActionLog: String = ""  // Shows LLM decision-making
     @Published public var recordingDuration: TimeInterval = 0
@@ -264,6 +265,12 @@ class MeetingAssistantViewModel: ObservableObject {
                         // Update transcription in real-time
                         self.transcription = newTranscription
                         self.streamingBuffer = newTranscription
+                    }
+                },
+                onAttributedUpdate: { [weak self] attributedText in
+                    guard let self = self else { return }
+                    Task { @MainActor in
+                        self.attributedTranscription = attributedText
                     }
                 }
             )

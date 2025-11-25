@@ -80,4 +80,48 @@ public class ParakeetModelService: TranscriptionModelProtocol {
     public func setComputeBackend(_ backend: ComputeBackend) async throws {
         try await parakeetModel.setComputeBackend(backend)
     }
+    
+    /// Transcribe audio chunk and return tokens with frame positions
+    /// This method exposes token-level data for frame-aligned token merging
+    /// - Parameters:
+    ///   - audioChunk: Audio chunk to transcribe
+    ///   - onTokenGenerated: Optional callback for streaming text updates
+    /// - Returns: Tuple of (tokens, tokenStartFrames, confidences)
+    public func transcribeWithTokens(
+        _ audioChunk: AudioChunk,
+        onTokenGenerated: ((String) -> Void)?
+    ) async throws -> (tokens: [Int], tokenStartFrames: [Int], confidences: [Float]) {
+        guard isLoaded else {
+            throw TranscriptionModelError.modelNotLoaded
+        }
+        
+        // Validate duration
+        if audioChunk.duration > maxContextDuration {
+            throw TranscriptionModelError.audioTooLong(
+                duration: audioChunk.duration,
+                maxDuration: maxContextDuration
+            )
+        }
+        
+        // Convert AudioChunk to WAV data
+        let wavData = AudioPreprocessor.convertSamplesToWAV(
+            audioChunk.samples,
+            sampleRate: audioChunk.sampleRate
+        )
+        
+        // Transcribe using token-level API
+        do {
+            let result = try await parakeetModel.transcribeChunkWithTokens(wavData, onProgress: onTokenGenerated)
+            return result
+        } catch {
+            throw TranscriptionModelError.inferenceFailed(error.localizedDescription)
+        }
+    }
+    
+    /// Decode token IDs to text
+    /// - Parameter tokens: Array of token IDs
+    /// - Returns: Decoded text string
+    public func decodeTokens(_ tokens: [Int]) -> String {
+        return parakeetModel.decodeTokens(tokens)
+    }
 }

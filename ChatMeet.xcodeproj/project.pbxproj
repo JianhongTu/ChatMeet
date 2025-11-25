@@ -26,7 +26,7 @@
 		F41F01E92ED50FAF00662A47 /* ParakeetDecoderJointer.mlpackage */ = {isa = PBXFileReference; lastKnownFileType = folder.mlpackage; path = ParakeetDecoderJointer.mlpackage; sourceTree = "<group>"; };
 		F41F01EA2ED50FAF00662A47 /* ParakeetEncoder.mlpackage */ = {isa = PBXFileReference; lastKnownFileType = folder.mlpackage; path = ParakeetEncoder.mlpackage; sourceTree = "<group>"; };
 		F41F01EB2ED50FAF00662A47 /* ParakeetPreprocessor.mlpackage */ = {isa = PBXFileReference; lastKnownFileType = folder.mlpackage; path = ParakeetPreprocessor.mlpackage; sourceTree = "<group>"; };
-		F41F01F12ED5140100662A47 /* Secrets.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Secrets.xcconfig; sourceTree = "<group>"; name = "Secrets.xcconfig"; path = "Config/Secrets.xcconfig"; };
+		F41F01F12ED5140100662A47 /* Secrets.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; name = Secrets.xcconfig; path = Config/Secrets.xcconfig; sourceTree = "<group>"; };
 		F44325192EBD62E800B89542 /* README.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = README.md; sourceTree = "<group>"; };
 		F443251A2EBD62E800B89542 /* StatefulLlama3.2Instruct.mlpackage */ = {isa = PBXFileReference; lastKnownFileType = folder.mlpackage; path = StatefulLlama3.2Instruct.mlpackage; sourceTree = "<group>"; };
 		F443251C2EBD62E800B89542 /* WhisperEncoder_whisper-tiny.mlpackage */ = {isa = PBXFileReference; lastKnownFileType = folder.mlpackage; path = "WhisperEncoder_whisper-tiny.mlpackage"; sourceTree = "<group>"; };
@@ -81,19 +81,19 @@
 			);
 			sourceTree = "<group>";
 		};
-		F44B06242ED51B9400009EBECA /* Config */ = {
-			isa = PBXGroup;
-			children = (
-			);
-			path = Config;
-			sourceTree = "<group>";
-		};
 		F44B05DB2EAB51FE009EBECA /* Products */ = {
 			isa = PBXGroup;
 			children = (
 				F44B05DA2EAB51FE009EBECA /* ChatMeet.app */,
 			);
 			name = Products;
+			sourceTree = "<group>";
+		};
+		F44B06242ED51B9400009EBECA /* Config */ = {
+			isa = PBXGroup;
+			children = (
+			);
+			path = Config;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
